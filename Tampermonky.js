@@ -1,4 +1,279 @@
-// ── Verificación y arranque ──
+(function () {
+    'use strict';
+
+    // ── Configuración ──
+    const AUTH_URL          = 'https://crimson-breeze-86fb.jy734933371.workers.dev';
+    const PANEL_ID          = 'jj-export-panel';
+    const MINI_ID           = 'jj-export-mini';
+    const STORAGE_POS       = 'jj_export_panel_pos';
+    const STORAGE_COLLAPSED = 'jj_export_panel_collapsed';
+    const INFORME_HREF      = '/CezanneHR/-/IQS/node/cf2ce6e3-6382-444c-800d-ea1502e71db5';
+
+    // ── Autorización ──
+    function getStoredToken() { return GM_getValue('jj_auth_token', ''); }
+    function saveToken(t)     { GM_setValue('jj_auth_token', t); }
+
+    function verifyToken(token) {
+        return new Promise((resolve) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: `${AUTH_URL}?token=${encodeURIComponent(token)}`,
+                timeout: 8000,
+                onload(res) {
+                    try { resolve(JSON.parse(res.responseText).ok === true); }
+                    catch { resolve(false); }
+                },
+                onerror()   { resolve(false); },
+                ontimeout() { resolve(false); },
+            });
+        });
+    }
+
+    // ── Diálogo de autorización (se abre al hacer clic en un botón) ──
+    function showAuthDialog(onSuccess) {
+        if (document.getElementById('jj-auth-overlay')) return;
+
+        GM_addStyle(`
+            #jj-auth-overlay {
+                position: fixed; inset: 0; z-index: 2147483646;
+                background: rgba(15,23,42,0.45);
+                backdrop-filter: blur(6px);
+                display: flex; align-items: center; justify-content: center;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            }
+            #jj-auth-box {
+                background: #fff; border-radius: 20px;
+                padding: 32px 28px 24px; width: 320px;
+                box-shadow: 0 24px 60px rgba(15,23,42,0.22);
+                display: flex; flex-direction: column; gap: 16px;
+            }
+            #jj-auth-box h2 { margin: 0; font-size: 16px; font-weight: 700; color: #0f172a; }
+            #jj-auth-box p  { margin: 0; font-size: 13px; color: #64748b; line-height: 1.5; }
+            #jj-auth-input {
+                width: 100%; padding: 10px 12px;
+                border: 1.5px solid #cbd5e1; border-radius: 10px;
+                font-size: 14px; color: #0f172a; outline: none;
+                transition: border-color 0.15s; box-sizing: border-box;
+            }
+            #jj-auth-input:focus { border-color: #94a3b8; }
+            #jj-auth-input.error { border-color: #ef4444; }
+            #jj-auth-err { font-size: 12px; color: #ef4444; margin: -8px 0 0; display: none; }
+            #jj-auth-cancel {
+                width: 100%; padding: 9px;
+                background: transparent; color: #94a3b8;
+                border: 1px solid rgba(203,213,225,0.6); border-radius: 10px;
+                font-size: 13px; cursor: pointer;
+                transition: color 0.15s, border-color 0.15s;
+            }
+            #jj-auth-cancel:hover { color: #475569; border-color: #94a3b8; }
+            #jj-auth-submit {
+                width: 100%; padding: 11px;
+                background: #0f172a; color: #fff;
+                border: none; border-radius: 10px;
+                font-size: 14px; font-weight: 600; cursor: pointer;
+                transition: background 0.15s, transform 0.1s;
+            }
+            #jj-auth-submit:hover    { background: #1e293b; }
+            #jj-auth-submit:active   { transform: scale(0.98); }
+            #jj-auth-submit:disabled { background: #94a3b8; cursor: not-allowed; }
+        `);
+
+        const overlay = document.createElement('div');
+        overlay.id = 'jj-auth-overlay';
+        overlay.innerHTML = `
+            <div id="jj-auth-box">
+                <h2>🔐 Cezanne Exporter</h2>
+                <p>Introduce el código de autorización proporcionado por el administrador.</p>
+                <input id="jj-auth-input" type="text" placeholder="Código de autorización" autocomplete="off" spellcheck="false" />
+                <div id="jj-auth-err">Código no válido. Contacta con el administrador.</div>
+                <button id="jj-auth-submit">Verificar</button>
+                <button id="jj-auth-cancel">Cancelar</button>
+            </div>`;
+        document.body.appendChild(overlay);
+
+        const input  = overlay.querySelector('#jj-auth-input');
+        const btn    = overlay.querySelector('#jj-auth-submit');
+        const cancel = overlay.querySelector('#jj-auth-cancel');
+        const errMsg = overlay.querySelector('#jj-auth-err');
+
+        async function attempt() {
+            const token = input.value.trim();
+            if (!token) return;
+            btn.disabled = true; btn.textContent = 'Verificando…';
+            errMsg.style.display = 'none'; input.classList.remove('error');
+            const ok = await verifyToken(token);
+            if (ok) {
+                saveToken(token); overlay.remove(); onSuccess();
+            } else {
+                btn.disabled = false; btn.textContent = 'Verificar';
+                input.classList.add('error'); errMsg.style.display = 'block'; input.focus();
+            }
+        }
+
+        btn.addEventListener('click', attempt);
+        cancel.addEventListener('click', () => overlay.remove());
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
+        // Cerrar al hacer clic fuera del cuadro
+        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+        input.focus();
+    }
+
+    // ── Lógica de exportación ──
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function normalizeText(text) { return (text || '').replace(/\s+/g, ' ').trim(); }
+
+    function isVisible(el) {
+        if (!el) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' &&
+               (el.offsetParent !== null || s.position === 'fixed');
+    }
+
+    async function waitFor(fn, timeout = 20000, interval = 300, errorMsg = 'Tiempo de espera agotado') {
+        const start = Date.now();
+        while (Date.now() - start < timeout) {
+            const result = fn(); if (result) return result;
+            await sleep(interval);
+        }
+        throw new Error(errorMsg);
+    }
+
+    async function navigateToInforme() {
+        let link = document.querySelector(`a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`);
+        if (!link) {
+            const sideIcon = document.querySelector('a[title="Informes y Analíticas"], a[id="navLink-9be6b119-d395-4322-8a0b-9dc8ba2f84f4"]');
+            if (sideIcon) { sideIcon.click(); await sleep(1500); }
+            link = await waitFor(
+                () => document.querySelector(`a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`),
+                10000, 300, 'No se encontró el enlace Informe Resumen de Personas'
+            );
+        }
+        link.click();
+        await waitFor(
+            () => Array.from(document.querySelectorAll('button'))
+                       .find(b => normalizeText(b.textContent) === 'Utilizar Plantilla Existente' && isVisible(b)),
+            20000, 300, 'Tiempo de espera agotado al cargar la página'
+        );
+        await sleep(500);
+    }
+
+    async function clickUsarPlantilla() {
+        const btn = await waitFor(() =>
+            Array.from(document.querySelectorAll('button'))
+                 .find(b => normalizeText(b.textContent) === 'Utilizar Plantilla Existente' && isVisible(b)),
+            15000, 300, 'No se encontró el botón «Utilizar Plantilla Existente»'
+        );
+        btn.click(); await sleep(1500);
+    }
+
+    function isPanelOpen() {
+        return !!document.querySelector('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-mdc-option');
+    }
+
+    async function openTemplateDropdown() {
+        const matSelect = await waitFor(() =>
+            Array.from(document.querySelectorAll('mat-select')).find(el => {
+                const ph = el.querySelector('.mat-mdc-select-placeholder');
+                return ph && isVisible(el) && normalizeText(ph.textContent).includes('Por Favor Seleccione');
+            }),
+            20000, 300, 'No se encontró el desplegable de plantillas'
+        );
+        const trigger = matSelect.querySelector('.mat-mdc-select-trigger') || matSelect;
+        matSelect.focus(); await sleep(200); trigger.click(); await sleep(600);
+        if (isPanelOpen()) return;
+        ['keydown','keyup'].forEach(type => matSelect.dispatchEvent(
+            new KeyboardEvent(type, { key:' ', code:'Space', keyCode:32, bubbles:true, cancelable:true })
+        ));
+        await sleep(600); if (isPanelOpen()) return;
+        for (const type of ['pointerdown','mousedown','pointerup','mouseup','click'])
+            trigger.dispatchEvent(new MouseEvent(type, { bubbles:true, cancelable:true, composed:true, view:window }));
+        await waitFor(isPanelOpen, 8000, 300, 'No se pudo abrir el desplegable de plantillas');
+    }
+
+    async function clickButton(text, label) {
+        const btn = await waitFor(() =>
+            Array.from(document.querySelectorAll('button'))
+                 .find(b => normalizeText(b.textContent) === text && isVisible(b) && !b.disabled),
+            20000, 300, `No se encontró el botón: ${label || text}`
+        );
+        btn.click(); await sleep(1800);
+    }
+
+    const TEMPLATES = [
+        { label: 'Maestro de empleados', name: 'Maestro de empleados (People & Organization)' },
+        { label: 'Empleados Activos',    name: 'Empleados Activos' },
+        { label: 'Revisión Médica 2025', name: 'Revisión Médica 2025' },
+    ];
+
+    async function runExportFlow(templateName) {
+        try {
+            window.__jj_export_running = true;
+            setStatus('running', `Exportando: ${templateName}`);
+            await navigateToInforme();
+            await clickUsarPlantilla();
+            await openTemplateDropdown();
+            const option = await waitFor(() =>
+                Array.from(document.querySelectorAll('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-mdc-option'))
+                     .find(el => normalizeText(el.textContent) === templateName && isVisible(el)),
+                15000, 300, `No se encontró la opción: ${templateName}`
+            );
+            option.click(); await sleep(1500);
+            await clickButton('Próximo', 'Próximo (1ª vez)');
+            await clickButton('Próximo', 'Próximo (2ª vez)');
+            await clickButton('Guardar y Exportar');
+            setStatus('done', '✅ Exportación completada');
+        } catch (err) {
+            console.error(err);
+            setStatus('error', `❌ ${err.message}`);
+        } finally {
+            window.__jj_export_running = false;
+        }
+    }
+
+    // ── UI ──
+    function setStatus(type, msg) {
+        const toast = document.querySelector('#jj-toast');
+        const text  = document.querySelector('#jj-status-text');
+        if (toast) toast.className = 'jj-toast' + (type ? ' jj-toast--' + type : '');
+        if (text)  { text.className = 'jj-status-text' + (type ? ' jj-status-text--' + type : ''); text.textContent = msg; }
+    }
+
+    function savePos(x, y) { localStorage.setItem(STORAGE_POS, JSON.stringify({ x, y })); }
+    function getPos()       { try { return JSON.parse(localStorage.getItem(STORAGE_POS) || 'null'); } catch { return null; } }
+    function setCollapsed(c){ localStorage.setItem(STORAGE_COLLAPSED, c ? '1' : '0'); }
+    function getCollapsed() { return localStorage.getItem(STORAGE_COLLAPSED) === '1'; }
+
+    function clampPos(x, y, w, h) {
+        return {
+            x: Math.max(0, Math.min(window.innerWidth  - w, x)),
+            y: Math.max(0, Math.min(window.innerHeight - h, y)),
+        };
+    }
+
+    function makeDraggable(el, handle) {
+        let dragging = false, ox = 0, oy = 0, moved = false;
+        handle.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+            dragging = true; moved = false;
+            const r = el.getBoundingClientRect();
+            ox = e.clientX - r.left; oy = e.clientY - r.top; e.preventDefault();
+        });
+        document.addEventListener('mousemove', e => {
+            if (!dragging) return; moved = true;
+            const x = Math.max(0, Math.min(window.innerWidth  - el.offsetWidth,  e.clientX - ox));
+            const y = Math.max(0, Math.min(window.innerHeight - el.offsetHeight, e.clientY - oy));
+            el.style.left = x + 'px'; el.style.top = y + 'px';
+            el.style.right = 'auto'; el.style.bottom = 'auto';
+        });
+        document.addEventListener('mouseup', e => {
+            if (!dragging) return; dragging = false;
+            if (moved) { const r = el.getBoundingClientRect(); savePos(r.left, r.top); e.stopImmediatePropagation(); }
+        }, true);
+        handle._wasMoved = () => moved;
+    }
+
+    // ── Verificación y arranque ──
     // El token se verifica la primera vez que el usuario pulsa un botón de exportación.
     // Si ya hay un token guardado y válido, el panel se muestra directamente.
     // Si el token es inválido o no existe, se abre el diálogo al hacer clic.
