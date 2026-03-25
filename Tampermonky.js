@@ -1,4 +1,4 @@
-(function () {
+(function (GM_addStyle, GM_setValue, GM_getValue, GM_xmlhttpRequest) {
     'use strict';
 
     // ── Configuración ──
