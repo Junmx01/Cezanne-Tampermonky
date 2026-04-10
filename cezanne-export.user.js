@@ -5,12 +5,9 @@
 // @description  Exportador con autorización por código
 // @match        *://*/CezanneHR/*
 // @grant        GM_addStyle
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @grant        GM_xmlhttpRequest
 // @connect      crimson-breeze-86fb.jy734933371.workers.dev
-// @updateURL    https://raw.githubusercontent.com/你的用户名/你的仓库名/main/cezanne-export.user.js
-// @downloadURL  https://raw.githubusercontent.com/你的用户名/你的仓库名/main/cezanne-export.user.js
+// @updateURL    https://raw.githubusercontent.com/Junmx01/Cezanne-Tampermonky/main/cezanne-export.user.js
+// @downloadURL  https://raw.githubusercontent.com/Junmx01/Cezanne-Tampermonky/main/cezanne-export.user.js
 // ==/UserScript==
 
 (function (GM_addStyle, GM_setValue, GM_getValue, GM_xmlhttpRequest) {
