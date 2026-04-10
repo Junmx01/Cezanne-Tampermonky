@@ -5,20 +5,18 @@
 // @description  Exportador con autorización por código
 // @match        *://*/CezanneHR/*
 // @grant        GM_addStyle
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
 // @connect      crimson-breeze-86fb.jy734933371.workers.dev
 // @updateURL    https://raw.githubusercontent.com/Junmx01/Cezanne-Tampermonky/main/cezanne-export.user.js
 // @downloadURL  https://raw.githubusercontent.com/Junmx01/Cezanne-Tampermonky/main/cezanne-export.user.js
 // ==/UserScript==
 
-(function (GM_addStyle, GM_setValue, GM_getValue, GM_xmlhttpRequest) {
+(function () {
     'use strict';
 
-    const AUTH_URL          = 'https://crimson-breeze-86fb.jy734933371.workers.dev';
-    const PANEL_ID          = 'jj-export-panel';
-    const MINI_ID           = 'jj-export-mini';
-    const STORAGE_POS       = 'jj_export_panel_pos';
-    const STORAGE_COLLAPSED = 'jj_export_panel_collapsed';
-    const INFORME_HREF      = '/CezanneHR/-/IQS/node/cf2ce6e3-6382-444c-800d-ea1502e71db5';
+    const AUTH_URL = 'https://crimson-breeze-86fb.jy734933371.workers.dev';
 
     function getStoredToken() { return GM_getValue('jj_auth_token', ''); }
     function saveToken(t)     { GM_setValue('jj_auth_token', t); }
@@ -39,5 +37,5 @@
         });
     }
 
-    // 下面把你原来的代码完整接上
+    // 下面接你的原代码
 })();
