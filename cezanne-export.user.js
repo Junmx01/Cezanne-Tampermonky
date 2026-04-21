@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cezanne - Exportar Maestro de empleados
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.0.2
 // @description  Exportador con autorización por código
 // @match        *://*/CezanneHR/*
 // @match        https://w3.cezanneondemand.com/*
