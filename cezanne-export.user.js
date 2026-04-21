@@ -300,17 +300,11 @@
     let authVerified = false;
 
     async function ensureAuth(onSuccess) {
-        if (authVerified) { onSuccess(); return; }
-        const token = getStoredToken();
-        if (token) {
-            setStatus('running', 'Verificando autorización…');
-            const ok = await verifyToken(token);
-            if (ok) { authVerified = true; setStatus('', 'Listo'); onSuccess(); return; }
-            clearToken();
-            setStatus('error', 'Código revocado. Vuelve a autorizarte.');
-        }
-        showAuthDialog(() => { authVerified = true; onSuccess(); });
-    }
+    if (authVerified) { onSuccess(); return; }
+    const token = getStoredToken();
+    if (token) { authVerified = true; onSuccess(); return; } // ← 有token直接放行
+    showAuthDialog(() => { authVerified = true; onSuccess(); });
+}
 
     // ── Status ──
     function setStatus(type, msg) {
