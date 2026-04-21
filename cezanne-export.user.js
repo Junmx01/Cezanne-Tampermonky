@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Cezanne - Exportar Maestro de empleados
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  Exportador con autorización por código, control de roles y ajustes de UI
+// @version      4.0
+// @description  Exportador con perfiles por usuario, botón de cancelar y ajustes de UI
 // @match        *://*/CezanneHR/*
 // @match        https://w3.cezanneondemand.com/*
 // @grant        GM_addStyle
@@ -14,35 +14,62 @@
 (function () {
     'use strict';
 
+    // ════════════════════════════════════════════════════════════════
+    //  CONFIGURACIÓN DE PERFILES
+    //  · Añadir persona  → nueva entrada en PROFILES
+    //  · Quitar botón    → eliminar su id del array buttons[]
+    //  · Worker debe devolver { ok: true, role: "<clave>" }
+    //    donde <clave> es exactamente el nombre de la propiedad aquí
+    //
+    //  IDs de botón disponibles: 'maestro' | 'activos' | 'revision'
+    //  color:  'admin' (morado) | 'user' (gris estándar)
+    // ════════════════════════════════════════════════════════════════
+    const PROFILES = {
+        // ── Admin ──────────────────────────────────────────────
+        'junjie': { label: 'Admin',  color: 'admin', buttons: ['maestro', 'activos', 'revision'] },
+
+        // ── Usuarios ───────────────────────────────────────────
+        // Cambia buttons[] para cada persona según lo que necesite
+        // IDs disponibles: 'maestro' | 'activos' | 'revision'
+        'emilio': { label: 'Emilio', color: 'user',  buttons: ['maestro'] },
+        'merce':  { label: 'Mercè',  color: 'user',  buttons: ['maestro'] },
+        'luisa':  { label: 'Luisa',  color: 'user',  buttons: ['maestro'] },
+        'carlos': { label: 'Carlos', color: 'user',  buttons: ['maestro'] },
+        'eva':    { label: 'Eva',    color: 'user',  buttons: ['maestro'] },
+    };
+
+    // ════════════════════════════════════════════════════════════════
+    //  CONSTANTES INTERNAS
+    // ════════════════════════════════════════════════════════════════
     const AUTH_URL          = 'https://crimson-breeze-86fb.jy734933371.workers.dev';
     const PANEL_ID          = 'jj-export-panel';
     const MINI_ID           = 'jj-export-mini';
     const STORAGE_POS       = 'jj_export_panel_pos';
     const STORAGE_COLLAPSED = 'jj_export_panel_collapsed';
     const STORAGE_TOKEN     = 'jj_auth_token';
-    const STORAGE_ROLE      = 'jj_auth_role';
+    const STORAGE_PROFILE   = 'jj_auth_profile';
     const STORAGE_THEME     = 'jj_theme';
     const INFORME_HREF      = '/CezanneHR/-/IQS/node/cf2ce6e3-6382-444c-800d-ea1502e71db5';
     const TARGET_TEMPLATE   = 'Maestro de empleados (People & Organization)';
 
-    // ── Auth / Role ──
-    function getStoredToken() { return localStorage.getItem(STORAGE_TOKEN) || ''; }
-    function saveToken(t)     { localStorage.setItem(STORAGE_TOKEN, t); }
-    function clearToken()     { localStorage.removeItem(STORAGE_TOKEN); }
-    function saveRole(r)      { localStorage.setItem(STORAGE_ROLE, r); }
-    function getRole()        { return localStorage.getItem(STORAGE_ROLE) || 'basic'; }
-    function clearRole()      { localStorage.removeItem(STORAGE_ROLE); }
+    // ── Auth / Perfil ──
+    function getStoredToken()   { return localStorage.getItem(STORAGE_TOKEN)   || ''; }
+    function saveToken(t)       { localStorage.setItem(STORAGE_TOKEN, t); }
+    function clearToken()       { localStorage.removeItem(STORAGE_TOKEN); }
+    function saveProfile(p)     { localStorage.setItem(STORAGE_PROFILE, p); }
+    function getStoredProfile() { return localStorage.getItem(STORAGE_PROFILE) || ''; }
+    function clearProfile()     { localStorage.removeItem(STORAGE_PROFILE); }
 
-    // ── Theme ──
+    // ── Tema ──
     function getTheme()   { return localStorage.getItem(STORAGE_THEME) || 'light'; }
     function saveTheme(t) { localStorage.setItem(STORAGE_THEME, t); }
 
-    // ── verifyToken devuelve rol ('admin','basic') o null ──
+    // ── verifyToken → devuelve clave de perfil o null ──
     async function verifyToken(token) {
         try {
             const res  = await fetch(`${AUTH_URL}?token=${encodeURIComponent(token)}`);
             const data = await res.json();
-            if (data.ok === true) return data.role || 'basic';
+            if (data.ok === true) return data.role || null;
             return null;
         } catch { return null; }
     }
@@ -114,11 +141,11 @@
             if (!token) return;
             btn.disabled = true; btn.textContent = 'Verificando…';
             errMsg.style.display = 'none'; input.classList.remove('error');
-            const role = await verifyToken(token);
-            if (role) {
-                saveToken(token); saveRole(role);
+            const profileKey = await verifyToken(token);
+            if (profileKey && PROFILES[profileKey]) {
+                saveToken(token); saveProfile(profileKey);
                 overlay.remove(); style.remove();
-                onSuccess(role);
+                onSuccess(profileKey);
             } else {
                 btn.disabled = false; btn.textContent = 'Verificar';
                 input.classList.add('error'); errMsg.style.display = 'block'; input.focus();
@@ -143,6 +170,7 @@
     async function waitFor(fn, timeout = 25000, interval = 400, msg = 'Tiempo de espera agotado') {
         const start = Date.now();
         while (Date.now() - start < timeout) {
+            checkAbort();
             const r = fn(); if (r) return r;
             await sleep(interval);
         }
@@ -157,6 +185,11 @@
         btn.click();
     }
 
+    // ── Cancelación ──
+    function checkAbort() {
+        if (window.__jj_export_abort) throw new Error('Cancelado por el usuario');
+    }
+
     // ── Pasos del flujo ──
     async function paso1_navegar() {
         setStatus('running', 'Paso 1/6: Navegando al informe…');
@@ -169,7 +202,7 @@
                 'a[title="Informes y Analíticas"], a[id="navLink-9be6b119-d395-4322-8a0b-9dc8ba2f84f4"], #ea96f17f-06cc-4493-a0d8-f527aaf01d9c'
             );
             if (!menuIcon) throw new Error('No se encontró el menú lateral "Informes y Analíticas"');
-            menuIcon.click(); await sleep(1500);
+            menuIcon.click(); await sleep(1500); checkAbort();
             link = await waitFor(
                 () => document.querySelector(`a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`),
                 10000, 300, 'No se encontró "Informe Resumen de Personas" en el menú'
@@ -177,7 +210,7 @@
         }
         link.click();
         await waitFor(() => findButton('Utilizar Plantilla Existente'), 25000, 400, 'La página del informe tardó demasiado en cargar');
-        await sleep(400);
+        await sleep(400); checkAbort();
     }
     async function paso2_usarPlantilla() {
         setStatus('running', 'Paso 2/6: Abriendo plantillas…');
@@ -187,7 +220,7 @@
                   isVisible(document.querySelector('mat-select, [role="combobox"]')),
             15000, 300, 'No apareció el desplegable de plantillas'
         );
-        await sleep(600);
+        await sleep(600); checkAbort();
     }
     async function paso3_seleccionarPlantilla() {
         setStatus('running', 'Paso 3/6: Seleccionando plantilla…');
@@ -196,13 +229,13 @@
             15000, 300, 'No se encontró el desplegable mat-select'
         );
         const trigger = matSelect.querySelector('.mat-mdc-select-trigger') || matSelect;
-        matSelect.focus(); await sleep(200); trigger.click(); await sleep(800);
+        matSelect.focus(); await sleep(200); checkAbort(); trigger.click(); await sleep(800); checkAbort();
         const panelOpen = () => !!document.querySelector('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-mdc-option');
         if (!panelOpen()) {
             ['keydown','keyup'].forEach(type =>
                 matSelect.dispatchEvent(new KeyboardEvent(type, { key:' ', code:'Space', keyCode:32, bubbles:true, cancelable:true }))
             );
-            await sleep(600);
+            await sleep(600); checkAbort();
         }
         if (!panelOpen()) {
             for (const type of ['pointerdown','mousedown','pointerup','mouseup','click'])
@@ -214,11 +247,11 @@
                        .find(el => norm(el) === TARGET_TEMPLATE && isVisible(el)),
             10000, 300, `No se encontró la opción "${TARGET_TEMPLATE}"`
         );
-        option.click(); await sleep(800);
+        option.click(); await sleep(800); checkAbort();
     }
     async function paso4_proximoUno() {
         setStatus('running', 'Paso 4/6: Avanzando (1/2)…');
-        await clickButton('Próximo'); await sleep(1500);
+        await clickButton('Próximo'); await sleep(1500); checkAbort();
     }
     async function paso5_checkboxYproximo() {
         setStatus('running', 'Paso 5/6: Verificando opciones…');
@@ -228,13 +261,13 @@
             return Array.from(document.querySelectorAll('input[type="checkbox"][kendocheckbox], input.k-checkbox'))
                 .find(el => isVisible(el));
         }, 20000, 400, 'No apareció el checkbox de opciones');
-        if (!checkbox.checked) { checkbox.click(); await sleep(400); }
+        if (!checkbox.checked) { checkbox.click(); await sleep(400); checkAbort(); }
         await clickButton('Próximo');
         await waitFor(
             () => document.querySelector('#criteria-builder-operator-all') || findButton('Guardar y Exportar'),
             30000, 500, 'La página de criterios tardó demasiado en cargar'
         );
-        await sleep(600);
+        await sleep(600); checkAbort();
     }
     async function paso6_guardar() {
         setStatus('running', 'Paso 6/6: Exportando…');
@@ -242,49 +275,85 @@
         await sleep(1000);
         setStatus('done', '✅ Exportación completada');
     }
+
     async function runExportFlow() {
+        window.__jj_export_abort   = false;
+        window.__jj_export_running = true;
+        setRunningUI(true);
         try {
-            window.__jj_export_running = true;
             await paso1_navegar(); await paso2_usarPlantilla(); await paso3_seleccionarPlantilla();
             await paso4_proximoUno(); await paso5_checkboxYproximo(); await paso6_guardar();
         } catch (err) {
-            console.error('[Cezanne Exporter]', err);
-            setStatus('error', `❌ ${err.message}`);
+            if (err.message === 'Cancelado por el usuario') {
+                setStatus('', 'Cancelado');
+            } else {
+                console.error('[Cezanne Exporter]', err);
+                setStatus('error', `❌ ${err.message}`);
+            }
         } finally {
             window.__jj_export_running = false;
+            window.__jj_export_abort   = false;
+            setRunningUI(false);
         }
     }
 
     // ── Auth flow ──
     let authVerified = false;
     async function ensureAuth(onSuccess) {
-        if (authVerified) { onSuccess(getRole()); return; }
+        if (authVerified) { onSuccess(getStoredProfile()); return; }
         const token = getStoredToken();
-        if (token) { authVerified = true; onSuccess(getRole()); return; }
-        showAuthDialog((role) => { authVerified = true; onSuccess(role); });
+        if (token) { authVerified = true; onSuccess(getStoredProfile()); return; }
+        showAuthDialog((profileKey) => { authVerified = true; onSuccess(profileKey); });
     }
 
-    // ── Role UI ──
-    function applyRole(role) {
+    // ── Aplicar perfil → muestra solo los botones del usuario ──
+    function applyProfile(profileKey) {
         const panel = document.getElementById(PANEL_ID);
         if (!panel) return;
-        const btnActivos  = panel.querySelector('#jj-btn-activos');
-        const btnRevision = panel.querySelector('#jj-btn-revision');
-        const roleTag     = panel.querySelector('#jj-role-tag');
-        if (role === 'admin') {
-            [btnActivos, btnRevision].forEach(btn => {
-                if (!btn) return;
+
+        const profile = PROFILES[profileKey];
+        if (!profile) return;
+
+        // Actualizar etiqueta de nombre
+        const roleTag = panel.querySelector('#jj-role-tag');
+        if (roleTag) {
+            roleTag.textContent = profile.label;
+            roleTag.className = 'jj-role-tag' + (profile.color === 'admin' ? ' jj-role-admin' : '');
+        }
+
+        // Mostrar/ocultar botones según el perfil
+        const allBtns = {
+            maestro:  panel.querySelector('#jj-btn-maestro'),
+            activos:  panel.querySelector('#jj-btn-activos'),
+            revision: panel.querySelector('#jj-btn-revision'),
+        };
+        Object.entries(allBtns).forEach(([id, btn]) => {
+            if (!btn) return;
+            if (profile.buttons.includes(id)) {
+                btn.style.display = '';    // visible
                 btn.disabled = false;
                 btn.classList.remove('jj-wip');
                 btn.querySelector('.jj-wip-badge')?.remove();
-            });
-            if (roleTag) { roleTag.textContent = 'Admin'; roleTag.classList.add('jj-role-admin'); }
+            } else {
+                btn.style.display = 'none'; // oculto
+            }
+        });
+    }
+
+    // ── UI de estado running / idle ──
+    function setRunningUI(running) {
+        const panel = document.getElementById(PANEL_ID);
+        if (!panel) return;
+        const allBtns = panel.querySelectorAll('.jj-btn');
+        if (running) {
+            allBtns.forEach(b => { b.disabled = true; });
         } else {
-            if (roleTag) { roleTag.textContent = 'Básico'; roleTag.classList.remove('jj-role-admin'); }
+            const pk = getStoredProfile();
+            if (pk && PROFILES[pk]) applyProfile(pk);
         }
     }
 
-    // ── Status ──
+    // ── Status bar ──
     function setStatus(type, msg) {
         const toast = document.querySelector('#jj-toast');
         const text  = document.querySelector('#jj-status-text');
@@ -292,7 +361,7 @@
         if (text)  { text.className = 'jj-status-text' + (type ? ' jj-status-text--' + type : ''); text.textContent = msg; }
     }
 
-    // ── Theme ──
+    // ── Tema ──
     function applyTheme(theme) {
         const panel = document.getElementById(PANEL_ID);
         const mini  = document.getElementById(MINI_ID);
@@ -340,13 +409,12 @@
         handle._wasMoved = () => moved;
     }
 
-    // ── UI ──
+    // ── Crear UI ──
     function createUI() {
         if (document.getElementById(PANEL_ID)) return;
 
         const style = document.createElement('style');
         style.textContent = `
-    /* ── Variables de tema ── */
     #${PANEL_ID}[data-theme="light"] {
         --bg:           rgba(250,250,252,0.93);
         --bg-header:    linear-gradient(180deg,rgba(255,255,255,0.8),rgba(248,250,252,0.7));
@@ -388,18 +456,15 @@
         --toggle-on:    #e2e8f0;
     }
     #${MINI_ID}[data-theme="dark"] {
-        background: rgba(15,23,42,0.96) !important;
-        color: #e2e8f0 !important;
-        border-color: rgba(255,255,255,0.1) !important;
+        background:rgba(15,23,42,0.96) !important;
+        color:#e2e8f0 !important;
+        border-color:rgba(255,255,255,0.1) !important;
     }
-
     * { box-sizing:border-box; }
-
     #${PANEL_ID} {
         position:fixed; right:20px; bottom:20px; z-index:2147483647;
         width:268px; background:var(--bg); color:var(--text);
-        border-radius:18px; box-shadow:var(--shadow);
-        border:1px solid var(--border);
+        border-radius:18px; box-shadow:var(--shadow); border:1px solid var(--border);
         backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
         font-size:13px; user-select:none; overflow:hidden;
@@ -428,9 +493,8 @@
         display:flex; align-items:center; justify-content:center;
         transition:background 0.15s, color 0.15s; flex-shrink:0;
     }
-    #${PANEL_ID} .jj-icon-btn:hover       { background:rgba(148,163,184,0.14); color:var(--text); }
-    #${PANEL_ID} .jj-icon-btn.active      { background:rgba(148,163,184,0.2);  color:var(--text); }
-
+    #${PANEL_ID} .jj-icon-btn:hover  { background:rgba(148,163,184,0.14); color:var(--text); }
+    #${PANEL_ID} .jj-icon-btn.active { background:rgba(148,163,184,0.2);  color:var(--text); }
     #${PANEL_ID} .jj-body { padding:12px; display:flex; flex-direction:column; gap:9px; }
     #${PANEL_ID} .jj-section-label {
         font-size:10px; font-weight:700; letter-spacing:0.08em;
@@ -444,18 +508,24 @@
         transition:background 0.15s, border-color 0.15s, transform 0.15s;
     }
     #${PANEL_ID} .jj-btn:hover:not(:disabled) { background:var(--bg-btn-hover); border-color:var(--border-btn-h); transform:translateY(-1px); }
-    #${PANEL_ID} .jj-btn:disabled  { opacity:0.4;  cursor:not-allowed; transform:none !important; }
-    #${PANEL_ID} .jj-btn.jj-wip   { opacity:0.35; cursor:not-allowed; }
+    #${PANEL_ID} .jj-btn:disabled { opacity:0.4; cursor:not-allowed; transform:none !important; }
     #${PANEL_ID} .jj-btn .jj-btn-icon {
         width:22px; height:22px; background:var(--bg-icon); color:var(--text-icon);
         border-radius:7px; display:flex; align-items:center; justify-content:center;
-        font-size:11px; font-weight:700; flex-shrink:0;
-        border:1px solid rgba(148,163,184,0.25);
+        font-size:11px; font-weight:700; flex-shrink:0; border:1px solid rgba(148,163,184,0.25);
     }
-    #${PANEL_ID} .jj-wip-badge {
-        margin-left:auto; font-size:10px; font-weight:600; color:var(--text-muted);
-        background:rgba(148,163,184,0.10); border-radius:6px; padding:2px 6px;
+
+    /* Botón cancelar */
+    #${PANEL_ID} #jj-cancel-btn {
+        display:none;
+        width:100%; padding:9px 12px;
+        background:rgba(239,68,68,0.08); color:#ef4444;
+        font-size:12px; font-weight:600;
+        border:1px solid rgba(239,68,68,0.25); border-radius:10px;
+        cursor:pointer; text-align:center;
+        transition:background 0.15s, border-color 0.15s;
     }
+    #${PANEL_ID} #jj-cancel-btn:hover { background:rgba(239,68,68,0.14); border-color:rgba(239,68,68,0.5); }
 
     #${PANEL_ID} .jj-toast { height:3px; width:100%; background:transparent; transition:background 0.25s; }
     #${PANEL_ID} .jj-toast--running { background:linear-gradient(90deg,#fbbf24,#f59e0b); }
@@ -469,25 +539,16 @@
     #${PANEL_ID} .jj-status-text--done    { color:#059669; }
     #${PANEL_ID} .jj-status-text--error   { color:#dc2626; }
 
-    /* ── Cajón de ajustes ── */
-    #${PANEL_ID} .jj-settings {
-        overflow:hidden; max-height:0;
-        transition:max-height 0.28s cubic-bezier(0.4,0,0.2,1);
-    }
+    /* Cajón de ajustes */
+    #${PANEL_ID} .jj-settings { overflow:hidden; max-height:0; transition:max-height 0.28s cubic-bezier(0.4,0,0.2,1); }
     #${PANEL_ID} .jj-settings.open { max-height:220px; }
     #${PANEL_ID} .jj-settings-inner {
-        padding:10px 12px 14px;
-        border-top:1px solid var(--border-sep);
-        background:var(--bg-settings);
-        display:flex; flex-direction:column; gap:12px;
+        padding:10px 12px 14px; border-top:1px solid var(--border-sep);
+        background:var(--bg-settings); display:flex; flex-direction:column; gap:12px;
     }
-    #${PANEL_ID} .jj-setting-row {
-        display:flex; align-items:center; justify-content:space-between;
-    }
+    #${PANEL_ID} .jj-setting-row { display:flex; align-items:center; justify-content:space-between; }
     #${PANEL_ID} .jj-setting-label { font-size:12px; font-weight:600; color:var(--text); }
     #${PANEL_ID} .jj-setting-sub   { font-size:10px; color:var(--text-muted); margin-top:2px; }
-
-    /* Toggle switch */
     #${PANEL_ID} .jj-toggle {
         width:40px; height:22px; background:var(--toggle-track);
         border-radius:11px; position:relative; cursor:pointer;
@@ -495,24 +556,25 @@
     }
     #${PANEL_ID} .jj-toggle[data-checked="true"] { background:var(--toggle-on); }
     #${PANEL_ID} .jj-toggle .jj-toggle-knob {
-        position:absolute; top:3px; left:3px;
-        width:16px; height:16px; background:#fff;
+        position:absolute; top:3px; left:3px; width:16px; height:16px; background:#fff;
         border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.2);
         transition:transform 0.2s cubic-bezier(0.4,0,0.2,1);
     }
-
-    /* Botón rojo ajustes */
     #${PANEL_ID} .jj-danger-btn {
-        width:100%; padding:8px 12px;
-        background:transparent; color:#ef4444;
-        font-size:12px; font-weight:600;
-        border:1px solid rgba(239,68,68,0.25); border-radius:10px;
-        cursor:pointer; text-align:center;
+        width:100%; padding:8px 12px; background:transparent; color:#ef4444;
+        font-size:12px; font-weight:600; border:1px solid rgba(239,68,68,0.25);
+        border-radius:10px; cursor:pointer; text-align:center;
         transition:background 0.15s, border-color 0.15s;
     }
     #${PANEL_ID} .jj-danger-btn:hover { background:rgba(239,68,68,0.07); border-color:rgba(239,68,68,0.5); }
+    #${PANEL_ID} .jj-logout-visible-btn {
+        width:100%; padding:8px 12px; background:transparent; color:var(--text-muted);
+        font-size:12px; font-weight:500; border:1px solid var(--border-btn);
+        border-radius:10px; cursor:pointer; text-align:center;
+        transition:background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    #${PANEL_ID} .jj-logout-visible-btn:hover { color:#ef4444; border-color:rgba(239,68,68,0.35); }
 
-    /* ── Mini burbuja ── */
     #${MINI_ID} {
         position:fixed; right:20px; bottom:20px; z-index:2147483647;
         width:46px; height:46px; background:rgba(255,255,255,0.92); color:#334155;
@@ -551,26 +613,24 @@
                     <span>Maestro de empleados</span>
                 </button>
 
-                <button class="jj-btn jj-wip" id="jj-btn-activos" disabled title="Próximamente">
+                <button class="jj-btn" id="jj-btn-activos" style="display:none">
                     <span class="jj-btn-icon">↓</span>
                     <span>Empleados Activos</span>
-                    <span class="jj-wip-badge">En desarrollo</span>
                 </button>
 
-                <button class="jj-btn jj-wip" id="jj-btn-revision" disabled title="Próximamente">
+                <button class="jj-btn" id="jj-btn-revision" style="display:none">
                     <span class="jj-btn-icon">↓</span>
                     <span>Revisión Médica 2025</span>
-                    <span class="jj-wip-badge">En desarrollo</span>
                 </button>
 
                 <div id="jj-status-text" class="jj-status-text">Listo</div>
+
+                <button class="jj-logout-visible-btn" id="jj-cancel-visible-btn">Cancelar</button>
             </div>
 
-            <!-- Cajón de ajustes -->
             <div class="jj-settings" id="jj-settings-panel">
                 <div class="jj-settings-inner">
                     <div class="jj-section-label">Ajustes</div>
-
                     <div class="jj-setting-row">
                         <div>
                             <div class="jj-setting-label">Tema oscuro</div>
@@ -580,10 +640,7 @@
                             <span class="jj-toggle-knob"></span>
                         </button>
                     </div>
-
-                    <button class="jj-danger-btn" id="jj-logout-btn">
-                       Cambiar contraseña
-                    </button>
+                    <button class="jj-danger-btn" id="jj-logout-btn">🔑 Cambiar contraseña</button>
                 </div>
             </div>`;
 
@@ -594,9 +651,12 @@
         document.body.appendChild(panel);
         document.body.appendChild(mini);
 
-        // Aplicar tema y rol guardados al cargar
+        // Aplicar tema y perfil guardados al cargar
         applyTheme(getTheme());
-        if (getStoredToken()) applyRole(getRole());
+        const savedProfile = getStoredProfile();
+        if (getStoredToken() && savedProfile && PROFILES[savedProfile]) {
+            applyProfile(savedProfile);
+        }
 
         // Posición guardada
         const pos = getPos();
@@ -634,7 +694,7 @@
             expandPanel();
         });
 
-        // Botón ⚙ → abrir / cerrar cajón
+        // Ajustes
         const settingsBtn   = panel.querySelector('#jj-settings-btn');
         const settingsPanel = panel.querySelector('#jj-settings-panel');
         settingsBtn.addEventListener('click', () => {
@@ -643,45 +703,45 @@
         });
 
         // Toggle tema
-        const themeToggle = panel.querySelector('#jj-theme-toggle');
-        themeToggle.addEventListener('click', () => {
+        panel.querySelector('#jj-theme-toggle').addEventListener('click', () => {
             const next = getTheme() === 'dark' ? 'light' : 'dark';
-            saveTheme(next);
-            applyTheme(next);
+            saveTheme(next); applyTheme(next);
         });
 
-        // Cambiar contraseña → borrar sesión local y pedir de nuevo la próxima vez
-        panel.querySelector('#jj-logout-btn').addEventListener('click', () => {
-            clearToken(); clearRole(); authVerified = false;
+        // Cerrar sesión (ajustes)
+        panel.querySelector('#jj-logout-btn').addEventListener('click', doLogout);
+
+        function doLogout() {
+            clearToken(); clearProfile(); authVerified = false;
             setStatus('', 'Listo');
-            applyRole('basic');
+            // Ocultar todos los botones hasta que se vuelva a autenticar
+            ['#jj-btn-maestro','#jj-btn-activos','#jj-btn-revision'].forEach(sel => {
+                const b = panel.querySelector(sel);
+                if (b) { b.style.display = 'none'; }
+            });
             const roleTag = panel.querySelector('#jj-role-tag');
             if (roleTag) roleTag.textContent = '';
             settingsPanel.classList.remove('open');
             settingsBtn.classList.remove('active');
+        }
+
+        // Cancelar tarea (botón siempre visible)
+        panel.querySelector('#jj-cancel-visible-btn').addEventListener('click', () => {
+            if (!window.__jj_export_running) return;
+            window.__jj_export_abort = true;
+            setStatus('', 'Cancelando…');
         });
 
         // Botones de plantillas
-        panel.querySelector('#jj-btn-maestro').addEventListener('click', () => {
-            if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
-            ensureAuth((role) => { applyRole(role); runExportFlow(); });
-        });
-        panel.querySelector('#jj-btn-activos').addEventListener('click', () => {
-            if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
-            ensureAuth((role) => {
-                applyRole(role);
-                // TODO: implementar runExportFlowActivos()
-                setStatus('error', '⚙️ Flujo pendiente de implementar');
-            });
-        });
-        panel.querySelector('#jj-btn-revision').addEventListener('click', () => {
-            if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
-            ensureAuth((role) => {
-                applyRole(role);
-                // TODO: implementar runExportFlowRevision()
-                setStatus('error', '⚙️ Flujo pendiente de implementar');
-            });
-        });
+        function handleBtnClick(flowFn) {
+            return () => {
+                if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
+                ensureAuth((profileKey) => { applyProfile(profileKey); flowFn(); });
+            };
+        }
+        panel.querySelector('#jj-btn-maestro') .addEventListener('click', handleBtnClick(runExportFlow));
+        panel.querySelector('#jj-btn-activos') .addEventListener('click', handleBtnClick(() => setStatus('error', '⚙️ Flujo pendiente de implementar')));
+        panel.querySelector('#jj-btn-revision').addEventListener('click', handleBtnClick(() => setStatus('error', '⚙️ Flujo pendiente de implementar')));
 
         makeDraggable(panel, panel.querySelector('.jj-header'));
         makeDraggable(mini, mini);
