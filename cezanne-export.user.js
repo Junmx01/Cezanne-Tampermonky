@@ -387,7 +387,7 @@
             y: Math.max(0, Math.min(window.innerHeight - h, y)),
         };
     }
-    function makeDraggable(el, handle) {
+    function makeDraggable(el, handle, onRelease) {
         let dragging = false, ox = 0, oy = 0, moved = false;
         handle.addEventListener('mousedown', e => {
             if (e.button !== 0) return;
@@ -404,7 +404,12 @@
         });
         document.addEventListener('mouseup', e => {
             if (!dragging) return; dragging = false;
-            if (moved) { const r = el.getBoundingClientRect(); savePos(r.left, r.top); e.stopImmediatePropagation(); }
+            if (moved) {
+                const r = el.getBoundingClientRect();
+                if (onRelease) onRelease(r);
+                else savePos(r.left, r.top);
+                e.stopImmediatePropagation();
+            }
         }, true);
         handle._wasMoved = () => moved;
     }
@@ -586,6 +591,7 @@
         backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
         transition:background 0.25s, color 0.25s, border-color 0.25s;
     }
+
         `;
         document.head.appendChild(style);
 
@@ -658,10 +664,12 @@
             applyProfile(savedProfile);
         }
 
+        const PANEL_W = 268, MINI_W = 46, SNAP_THRESHOLD = 80;
+
         // Posición guardada
         const pos = getPos();
         if (pos) {
-            const { x, y } = clampPos(pos.x, pos.y, 268, 220);
+            const { x, y } = clampPos(pos.x, pos.y, PANEL_W, 220);
             [panel, mini].forEach(el => {
                 el.style.left = x + 'px'; el.style.top = y + 'px';
                 el.style.right = 'auto'; el.style.bottom = 'auto';
@@ -670,16 +678,20 @@
 
         let collapsed = getCollapsed();
 
+        // collapsePanel: mini aparece en la esquina donde estaba el botón "−"
         function collapsePanel() {
             const r = panel.getBoundingClientRect();
-            mini.style.left = r.left + 'px'; mini.style.top = r.top + 'px';
+            mini.style.left = (r.right - MINI_W) + 'px';
+            mini.style.top  = r.top + 'px';
             mini.style.right = 'auto'; mini.style.bottom = 'auto';
             panel.style.display = 'none'; mini.style.display = 'flex';
             collapsed = true; setCollapsed(true);
         }
+        // expandPanel: panel se abre con la esquina superior derecha alineada con el mini
         function expandPanel() {
             const r = mini.getBoundingClientRect();
-            panel.style.left = r.left + 'px'; panel.style.top = r.top + 'px';
+            panel.style.left = Math.max(0, r.right - PANEL_W) + 'px';
+            panel.style.top  = r.top + 'px';
             panel.style.right = 'auto'; panel.style.bottom = 'auto';
             mini.style.display = 'none'; panel.style.display = '';
             collapsed = false; setCollapsed(false);
@@ -743,8 +755,18 @@
         panel.querySelector('#jj-btn-activos') .addEventListener('click', handleBtnClick(() => setStatus('error', '⚙️ Flujo pendiente de implementar')));
         panel.querySelector('#jj-btn-revision').addEventListener('click', handleBtnClick(() => setStatus('error', '⚙️ Flujo pendiente de implementar')));
 
-        makeDraggable(panel, panel.querySelector('.jj-header'));
+        makeDraggable(panel, panel.querySelector('.jj-header'), (r) => {
+            // Si se suelta cerca del borde derecho → snap pegado al borde (totalmente visible)
+            let x = r.left, y = r.top;
+            if (window.innerWidth - r.right < SNAP_THRESHOLD) {
+                x = window.innerWidth - PANEL_W;
+            }
+            panel.style.left = x + 'px';
+            savePos(x, y);
+        });
         makeDraggable(mini, mini);
+
+        // Restaurar estado dock al cargar
         if (collapsed) collapsePanel();
     }
 
