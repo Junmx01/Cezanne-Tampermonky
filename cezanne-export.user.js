@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Cezanne - Exportar Maestro de empleados
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
-// @description  Exportador con autorización por código
+// @version      3.0
+// @description  Exportador con autorización por código, control de roles y ajustes de UI
 // @match        *://*/CezanneHR/*
+// @match        https://w3.cezanneondemand.com/*
 // @grant        GM_addStyle
 // @connect      crimson-breeze-86fb.jy734933371.workers.dev
 // @updateURL    https://raw.githubusercontent.com/Junmx01/Cezanne-Tampermonky/main/cezanne-export.user.js
@@ -19,59 +20,77 @@
     const STORAGE_POS       = 'jj_export_panel_pos';
     const STORAGE_COLLAPSED = 'jj_export_panel_collapsed';
     const STORAGE_TOKEN     = 'jj_auth_token';
+    const STORAGE_ROLE      = 'jj_auth_role';
+    const STORAGE_THEME     = 'jj_theme';
     const INFORME_HREF      = '/CezanneHR/-/IQS/node/cf2ce6e3-6382-444c-800d-ea1502e71db5';
     const TARGET_TEMPLATE   = 'Maestro de empleados (People & Organization)';
 
-    // ── Auth ──
+    // ── Auth / Role ──
     function getStoredToken() { return localStorage.getItem(STORAGE_TOKEN) || ''; }
     function saveToken(t)     { localStorage.setItem(STORAGE_TOKEN, t); }
     function clearToken()     { localStorage.removeItem(STORAGE_TOKEN); }
+    function saveRole(r)      { localStorage.setItem(STORAGE_ROLE, r); }
+    function getRole()        { return localStorage.getItem(STORAGE_ROLE) || 'basic'; }
+    function clearRole()      { localStorage.removeItem(STORAGE_ROLE); }
 
+    // ── Theme ──
+    function getTheme()   { return localStorage.getItem(STORAGE_THEME) || 'light'; }
+    function saveTheme(t) { localStorage.setItem(STORAGE_THEME, t); }
+
+    // ── verifyToken devuelve rol ('admin','basic') o null ──
     async function verifyToken(token) {
         try {
-            const res = await fetch(`${AUTH_URL}?token=${encodeURIComponent(token)}`);
+            const res  = await fetch(`${AUTH_URL}?token=${encodeURIComponent(token)}`);
             const data = await res.json();
-            return data.ok === true;
-        } catch { return false; }
+            if (data.ok === true) return data.role || 'basic';
+            return null;
+        } catch { return null; }
     }
 
     function showAuthDialog(onSuccess) {
         if (document.getElementById('jj-auth-overlay')) return;
+        const isDark = getTheme() === 'dark';
         const style = document.createElement('style');
+        style.id = 'jj-auth-style';
         style.textContent = `
             #jj-auth-overlay {
-                position: fixed; inset: 0; z-index: 2147483646;
-                background: rgba(15,23,42,0.45); backdrop-filter: blur(6px);
-                display: flex; align-items: center; justify-content: center;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                position:fixed; inset:0; z-index:2147483646;
+                background:rgba(15,23,42,0.5); backdrop-filter:blur(6px);
+                display:flex; align-items:center; justify-content:center;
+                font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
             }
             #jj-auth-box {
-                background: #fff; border-radius: 20px;
-                padding: 32px 28px 24px; width: 320px;
-                box-shadow: 0 24px 60px rgba(15,23,42,0.22);
-                display: flex; flex-direction: column; gap: 16px;
+                background:${isDark ? '#1e293b' : '#fff'}; border-radius:20px;
+                padding:32px 28px 24px; width:320px;
+                box-shadow:0 24px 60px rgba(15,23,42,0.28);
+                display:flex; flex-direction:column; gap:16px;
+                border:1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'};
             }
-            #jj-auth-box h2 { margin: 0; font-size: 16px; font-weight: 700; color: #0f172a; }
-            #jj-auth-box p  { margin: 0; font-size: 13px; color: #64748b; line-height: 1.5; }
+            #jj-auth-box h2 { margin:0; font-size:16px; font-weight:700; color:${isDark ? '#f1f5f9' : '#0f172a'}; }
+            #jj-auth-box p  { margin:0; font-size:13px; color:${isDark ? '#94a3b8' : '#64748b'}; line-height:1.5; }
             #jj-auth-input {
-                width: 100%; padding: 10px 12px;
-                border: 1.5px solid #cbd5e1; border-radius: 10px;
-                font-size: 14px; color: #0f172a; outline: none;
-                transition: border-color 0.15s; box-sizing: border-box;
+                width:100%; padding:10px 12px;
+                border:1.5px solid ${isDark ? '#334155' : '#cbd5e1'}; border-radius:10px;
+                font-size:14px; color:${isDark ? '#f1f5f9' : '#0f172a'};
+                background:${isDark ? '#0f172a' : '#fff'}; outline:none;
+                transition:border-color 0.15s; box-sizing:border-box;
             }
-            #jj-auth-input:focus { border-color: #94a3b8; }
-            #jj-auth-input.error { border-color: #ef4444; }
-            #jj-auth-err { font-size: 12px; color: #ef4444; margin: -8px 0 0; display: none; }
+            #jj-auth-input:focus { border-color:#94a3b8; }
+            #jj-auth-input.error { border-color:#ef4444; }
+            #jj-auth-err { font-size:12px; color:#ef4444; margin:-8px 0 0; display:none; }
             #jj-auth-cancel {
-                width: 100%; padding: 9px; background: transparent; color: #94a3b8;
-                border: 1px solid rgba(203,213,225,0.6); border-radius: 10px;
-                font-size: 13px; cursor: pointer;
+                width:100%; padding:9px; background:transparent;
+                color:${isDark ? '#64748b' : '#94a3b8'};
+                border:1px solid ${isDark ? 'rgba(100,116,139,0.4)' : 'rgba(203,213,225,0.6)'};
+                border-radius:10px; font-size:13px; cursor:pointer;
             }
             #jj-auth-submit {
-                width: 100%; padding: 11px; background: #0f172a; color: #fff;
-                border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;
+                width:100%; padding:11px;
+                background:${isDark ? '#f1f5f9' : '#0f172a'};
+                color:${isDark ? '#0f172a' : '#fff'};
+                border:none; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer;
             }
-            #jj-auth-submit:disabled { background: #94a3b8; cursor: not-allowed; }
+            #jj-auth-submit:disabled { background:#94a3b8; cursor:not-allowed; }
         `;
         document.head.appendChild(style);
         const overlay = document.createElement('div');
@@ -95,199 +114,139 @@
             if (!token) return;
             btn.disabled = true; btn.textContent = 'Verificando…';
             errMsg.style.display = 'none'; input.classList.remove('error');
-            const ok = await verifyToken(token);
-            if (ok) { saveToken(token); overlay.remove(); onSuccess(); }
-            else {
+            const role = await verifyToken(token);
+            if (role) {
+                saveToken(token); saveRole(role);
+                overlay.remove(); style.remove();
+                onSuccess(role);
+            } else {
                 btn.disabled = false; btn.textContent = 'Verificar';
                 input.classList.add('error'); errMsg.style.display = 'block'; input.focus();
             }
         }
         btn.addEventListener('click', attempt);
-        cancel.addEventListener('click', () => overlay.remove());
+        cancel.addEventListener('click', () => { overlay.remove(); style.remove(); });
         input.addEventListener('keydown', e => { if (e.key === 'Enter') attempt(); });
-        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+        overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); style.remove(); } });
         input.focus();
     }
 
     // ── Utilidades ──
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-    function norm(el) {
-        return (el?.textContent || '').replace(/\s+/g, ' ').trim();
-    }
-
+    function norm(el)  { return (el?.textContent || '').replace(/\s+/g, ' ').trim(); }
     function isVisible(el) {
         if (!el) return false;
         const s = window.getComputedStyle(el);
         return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' &&
                (el.offsetParent !== null || s.position === 'fixed');
     }
-
     async function waitFor(fn, timeout = 25000, interval = 400, msg = 'Tiempo de espera agotado') {
         const start = Date.now();
         while (Date.now() - start < timeout) {
-            const r = fn();
-            if (r) return r;
+            const r = fn(); if (r) return r;
             await sleep(interval);
         }
         throw new Error(msg);
     }
-
     function findButton(text) {
         return Array.from(document.querySelectorAll('button'))
             .find(b => norm(b) === text && isVisible(b) && !b.disabled);
     }
-
     async function clickButton(text, timeout = 25000) {
         const btn = await waitFor(() => findButton(text), timeout, 400, `No se encontró el botón: "${text}"`);
         btn.click();
     }
 
     // ── Pasos del flujo ──
-
-    // Paso 1: navegar a Informe Resumen de Personas
     async function paso1_navegar() {
         setStatus('running', 'Paso 1/6: Navegando al informe…');
-
-        // ¿Ya estamos en la página correcta? (botón Utilizar Plantilla Existente visible)
         if (findButton('Utilizar Plantilla Existente')) return;
-
-        // Buscar enlace directo al informe
         let link = document.querySelector(
             `a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`
         );
-
-        // Si no aparece, expandir el menú lateral primero
         if (!link) {
             const menuIcon = document.querySelector(
                 'a[title="Informes y Analíticas"], a[id="navLink-9be6b119-d395-4322-8a0b-9dc8ba2f84f4"], #ea96f17f-06cc-4493-a0d8-f527aaf01d9c'
             );
             if (!menuIcon) throw new Error('No se encontró el menú lateral "Informes y Analíticas"');
-            menuIcon.click();
-            await sleep(1500);
+            menuIcon.click(); await sleep(1500);
             link = await waitFor(
                 () => document.querySelector(`a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`),
                 10000, 300, 'No se encontró "Informe Resumen de Personas" en el menú'
             );
         }
-
         link.click();
-
-        // Esperar a que cargue la página (aparece el botón Utilizar Plantilla Existente)
         await waitFor(() => findButton('Utilizar Plantilla Existente'), 25000, 400, 'La página del informe tardó demasiado en cargar');
         await sleep(400);
     }
-
-    // Paso 2: clic en "Utilizar Plantilla Existente"
     async function paso2_usarPlantilla() {
         setStatus('running', 'Paso 2/6: Abriendo plantillas…');
         await clickButton('Utilizar Plantilla Existente');
-        // Esperar a que aparezca el desplegable de plantillas
         await waitFor(
-            () => document.querySelector('mat-select, [role="combobox"]') && isVisible(document.querySelector('mat-select, [role="combobox"]')),
+            () => document.querySelector('mat-select, [role="combobox"]') &&
+                  isVisible(document.querySelector('mat-select, [role="combobox"]')),
             15000, 300, 'No apareció el desplegable de plantillas'
         );
         await sleep(600);
     }
-
-    // Paso 3: abrir el dropdown y seleccionar la plantilla
     async function paso3_seleccionarPlantilla() {
         setStatus('running', 'Paso 3/6: Seleccionando plantilla…');
-
-        const matSelect = await waitFor(() => {
-            return Array.from(document.querySelectorAll('mat-select')).find(el => isVisible(el));
-        }, 15000, 300, 'No se encontró el desplegable mat-select');
-
-        // Intentar abrir el dropdown
+        const matSelect = await waitFor(
+            () => Array.from(document.querySelectorAll('mat-select')).find(el => isVisible(el)),
+            15000, 300, 'No se encontró el desplegable mat-select'
+        );
         const trigger = matSelect.querySelector('.mat-mdc-select-trigger') || matSelect;
-        matSelect.focus();
-        await sleep(200);
-        trigger.click();
-        await sleep(800);
-
-        // Si no se abrió, intentar con eventos de teclado
+        matSelect.focus(); await sleep(200); trigger.click(); await sleep(800);
         const panelOpen = () => !!document.querySelector('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-mdc-option');
         if (!panelOpen()) {
-            ['keydown', 'keyup'].forEach(type =>
-                matSelect.dispatchEvent(new KeyboardEvent(type, { key: ' ', code: 'Space', keyCode: 32, bubbles: true, cancelable: true }))
+            ['keydown','keyup'].forEach(type =>
+                matSelect.dispatchEvent(new KeyboardEvent(type, { key:' ', code:'Space', keyCode:32, bubbles:true, cancelable:true }))
             );
             await sleep(600);
         }
         if (!panelOpen()) {
-            for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
-                trigger.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: window }));
+            for (const type of ['pointerdown','mousedown','pointerup','mouseup','click'])
+                trigger.dispatchEvent(new MouseEvent(type, { bubbles:true, cancelable:true, composed:true, view:window }));
             await waitFor(panelOpen, 8000, 300, 'No se pudo abrir el desplegable de plantillas');
         }
-
-        // Buscar y clicar la opción correcta
         const option = await waitFor(
             () => Array.from(document.querySelectorAll('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-mdc-option'))
                        .find(el => norm(el) === TARGET_TEMPLATE && isVisible(el)),
             10000, 300, `No se encontró la opción "${TARGET_TEMPLATE}"`
         );
-        option.click();
-        await sleep(800);
+        option.click(); await sleep(800);
     }
-
-    // Paso 4: primer "Próximo"
     async function paso4_proximoUno() {
         setStatus('running', 'Paso 4/6: Avanzando (1/2)…');
-        await clickButton('Próximo');
-        await sleep(1500);
+        await clickButton('Próximo'); await sleep(1500);
     }
-
-    // Paso 5: verificar/marcar checkbox y segundo "Próximo"
     async function paso5_checkboxYproximo() {
         setStatus('running', 'Paso 5/6: Verificando opciones…');
-
-        // Esperar a que aparezca el checkbox
-        const checkbox = await waitFor(
-            () => {
-                // Buscar por aria-label específico
-                const byLabel = document.querySelector('input[type="checkbox"][aria-label="Automatización para datos de entrada y salida"]');
-                if (byLabel && isVisible(byLabel)) return byLabel;
-                // Fallback: cualquier checkbox kendocheckbox visible
-                return Array.from(document.querySelectorAll('input[type="checkbox"][kendocheckbox], input.k-checkbox'))
-                    .find(el => isVisible(el));
-            },
-            20000, 400, 'No apareció el checkbox de opciones'
-        );
-
-        // Marcar si no está marcado
-        if (!checkbox.checked) {
-            checkbox.click();
-            await sleep(400);
-        }
-
-        // Segundo Próximo
+        const checkbox = await waitFor(() => {
+            const byLabel = document.querySelector('input[type="checkbox"][aria-label="Automatización para datos de entrada y salida"]');
+            if (byLabel && isVisible(byLabel)) return byLabel;
+            return Array.from(document.querySelectorAll('input[type="checkbox"][kendocheckbox], input.k-checkbox'))
+                .find(el => isVisible(el));
+        }, 20000, 400, 'No apareció el checkbox de opciones');
+        if (!checkbox.checked) { checkbox.click(); await sleep(400); }
         await clickButton('Próximo');
-
-        // Esperar a que cargue la siguiente página (criteria-builder o Guardar y Exportar)
         await waitFor(
             () => document.querySelector('#criteria-builder-operator-all') || findButton('Guardar y Exportar'),
             30000, 500, 'La página de criterios tardó demasiado en cargar'
         );
         await sleep(600);
     }
-
-    // Paso 6: guardar y exportar
     async function paso6_guardar() {
         setStatus('running', 'Paso 6/6: Exportando…');
         await clickButton('Guardar y Exportar');
         await sleep(1000);
         setStatus('done', '✅ Exportación completada');
     }
-
-    // ── Flujo principal ──
     async function runExportFlow() {
         try {
             window.__jj_export_running = true;
-            await paso1_navegar();
-            await paso2_usarPlantilla();
-            await paso3_seleccionarPlantilla();
-            await paso4_proximoUno();
-            await paso5_checkboxYproximo();
-            await paso6_guardar();
+            await paso1_navegar(); await paso2_usarPlantilla(); await paso3_seleccionarPlantilla();
+            await paso4_proximoUno(); await paso5_checkboxYproximo(); await paso6_guardar();
         } catch (err) {
             console.error('[Cezanne Exporter]', err);
             setStatus('error', `❌ ${err.message}`);
@@ -298,13 +257,32 @@
 
     // ── Auth flow ──
     let authVerified = false;
-
     async function ensureAuth(onSuccess) {
-    if (authVerified) { onSuccess(); return; }
-    const token = getStoredToken();
-    if (token) { authVerified = true; onSuccess(); return; } // ← 有token直接放行
-    showAuthDialog(() => { authVerified = true; onSuccess(); });
-}
+        if (authVerified) { onSuccess(getRole()); return; }
+        const token = getStoredToken();
+        if (token) { authVerified = true; onSuccess(getRole()); return; }
+        showAuthDialog((role) => { authVerified = true; onSuccess(role); });
+    }
+
+    // ── Role UI ──
+    function applyRole(role) {
+        const panel = document.getElementById(PANEL_ID);
+        if (!panel) return;
+        const btnActivos  = panel.querySelector('#jj-btn-activos');
+        const btnRevision = panel.querySelector('#jj-btn-revision');
+        const roleTag     = panel.querySelector('#jj-role-tag');
+        if (role === 'admin') {
+            [btnActivos, btnRevision].forEach(btn => {
+                if (!btn) return;
+                btn.disabled = false;
+                btn.classList.remove('jj-wip');
+                btn.querySelector('.jj-wip-badge')?.remove();
+            });
+            if (roleTag) { roleTag.textContent = 'Admin'; roleTag.classList.add('jj-role-admin'); }
+        } else {
+            if (roleTag) { roleTag.textContent = 'Básico'; roleTag.classList.remove('jj-role-admin'); }
+        }
+    }
 
     // ── Status ──
     function setStatus(type, msg) {
@@ -314,19 +292,32 @@
         if (text)  { text.className = 'jj-status-text' + (type ? ' jj-status-text--' + type : ''); text.textContent = msg; }
     }
 
+    // ── Theme ──
+    function applyTheme(theme) {
+        const panel = document.getElementById(PANEL_ID);
+        const mini  = document.getElementById(MINI_ID);
+        if (!panel) return;
+        panel.setAttribute('data-theme', theme);
+        if (mini) mini.setAttribute('data-theme', theme);
+        const toggle = panel.querySelector('#jj-theme-toggle');
+        if (toggle) {
+            const isDark = theme === 'dark';
+            toggle.setAttribute('data-checked', isDark ? 'true' : 'false');
+            toggle.querySelector('.jj-toggle-knob').style.transform = isDark ? 'translateX(20px)' : 'translateX(0)';
+        }
+    }
+
     // ── Panel drag ──
     function savePos(x, y) { localStorage.setItem(STORAGE_POS, JSON.stringify({ x, y })); }
     function getPos()       { try { return JSON.parse(localStorage.getItem(STORAGE_POS) || 'null'); } catch { return null; } }
     function setCollapsed(c){ localStorage.setItem(STORAGE_COLLAPSED, c ? '1' : '0'); }
     function getCollapsed() { return localStorage.getItem(STORAGE_COLLAPSED) === '1'; }
-
     function clampPos(x, y, w, h) {
         return {
             x: Math.max(0, Math.min(window.innerWidth  - w, x)),
             y: Math.max(0, Math.min(window.innerHeight - h, y)),
         };
     }
-
     function makeDraggable(el, handle) {
         let dragging = false, ox = 0, oy = 0, moved = false;
         handle.addEventListener('mousedown', e => {
@@ -355,71 +346,183 @@
 
         const style = document.createElement('style');
         style.textContent = `
-    * { box-sizing: border-box; }
+    /* ── Variables de tema ── */
+    #${PANEL_ID}[data-theme="light"] {
+        --bg:           rgba(250,250,252,0.93);
+        --bg-header:    linear-gradient(180deg,rgba(255,255,255,0.8),rgba(248,250,252,0.7));
+        --bg-btn:       rgba(255,255,255,0.92);
+        --bg-btn-hover: #fff;
+        --bg-icon:      linear-gradient(180deg,#e2e8f0,#cbd5e1);
+        --bg-settings:  rgba(248,250,252,0.98);
+        --border:       rgba(148,163,184,0.18);
+        --border-btn:   rgba(203,213,225,0.9);
+        --border-btn-h: rgba(148,163,184,0.9);
+        --border-sep:   rgba(148,163,184,0.14);
+        --text:         #1f2937;
+        --text-title:   #475569;
+        --text-icon:    #334155;
+        --text-muted:   #94a3b8;
+        --text-label:   #94a3b8;
+        --shadow:       0 14px 40px rgba(15,23,42,0.16);
+        --toggle-track: #cbd5e1;
+        --toggle-on:    #334155;
+    }
+    #${PANEL_ID}[data-theme="dark"] {
+        --bg:           rgba(15,23,42,0.96);
+        --bg-header:    linear-gradient(180deg,rgba(30,41,59,0.9),rgba(15,23,42,0.85));
+        --bg-btn:       rgba(30,41,59,0.9);
+        --bg-btn-hover: rgba(30,41,59,1);
+        --bg-icon:      linear-gradient(180deg,#334155,#1e293b);
+        --bg-settings:  rgba(10,17,32,0.99);
+        --border:       rgba(255,255,255,0.07);
+        --border-btn:   rgba(255,255,255,0.1);
+        --border-btn-h: rgba(255,255,255,0.2);
+        --border-sep:   rgba(255,255,255,0.07);
+        --text:         #e2e8f0;
+        --text-title:   #94a3b8;
+        --text-icon:    #cbd5e1;
+        --text-muted:   #475569;
+        --text-label:   #475569;
+        --shadow:       0 14px 40px rgba(0,0,0,0.5);
+        --toggle-track: #334155;
+        --toggle-on:    #e2e8f0;
+    }
+    #${MINI_ID}[data-theme="dark"] {
+        background: rgba(15,23,42,0.96) !important;
+        color: #e2e8f0 !important;
+        border-color: rgba(255,255,255,0.1) !important;
+    }
+
+    * { box-sizing:border-box; }
+
     #${PANEL_ID} {
-        position: fixed; right: 20px; bottom: 20px; z-index: 2147483647;
-        width: 268px; background: rgba(250,250,252,0.92); color: #1f2937;
-        border-radius: 18px; box-shadow: 0 14px 40px rgba(15,23,42,0.16);
-        border: 1px solid rgba(148,163,184,0.18);
-        backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        font-size: 13px; user-select: none; overflow: hidden;
+        position:fixed; right:20px; bottom:20px; z-index:2147483647;
+        width:268px; background:var(--bg); color:var(--text);
+        border-radius:18px; box-shadow:var(--shadow);
+        border:1px solid var(--border);
+        backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+        font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+        font-size:13px; user-select:none; overflow:hidden;
+        transition:background 0.25s, box-shadow 0.25s, border-color 0.25s;
     }
     #${PANEL_ID} .jj-header {
-        display: flex; align-items: center; justify-content: space-between; padding: 12px 14px;
-        background: linear-gradient(180deg, rgba(255,255,255,0.75), rgba(248,250,252,0.65));
-        cursor: grab; border-bottom: 1px solid rgba(148,163,184,0.14);
+        display:flex; align-items:center; justify-content:space-between;
+        padding:12px 14px; background:var(--bg-header);
+        cursor:grab; border-bottom:1px solid var(--border-sep); gap:6px;
     }
-    #${PANEL_ID} .jj-header:active { cursor: grabbing; }
-    #${PANEL_ID} .jj-title { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #475569; }
-    #${PANEL_ID} .jj-collapse-btn {
-        width: 24px; height: 24px; background: rgba(148,163,184,0.14); border: none;
-        border-radius: 8px; color: #64748b; font-size: 14px; cursor: pointer;
-        display: flex; align-items: center; justify-content: center;
+    #${PANEL_ID} .jj-header:active { cursor:grabbing; }
+    #${PANEL_ID} .jj-header-left  { display:flex; align-items:center; gap:7px; flex:1; min-width:0; }
+    #${PANEL_ID} .jj-header-right { display:flex; align-items:center; gap:4px; flex-shrink:0; }
+    #${PANEL_ID} .jj-title {
+        font-size:12px; font-weight:700; letter-spacing:0.06em;
+        text-transform:uppercase; color:var(--text-title); white-space:nowrap;
     }
-    #${PANEL_ID} .jj-body { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
-    #${PANEL_ID} .jj-section-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #94a3b8; padding: 0 2px; }
+    #${PANEL_ID} .jj-role-tag {
+        font-size:10px; font-weight:600; color:var(--text-muted);
+        background:rgba(148,163,184,0.12); border-radius:6px; padding:2px 7px; white-space:nowrap;
+    }
+    #${PANEL_ID} .jj-role-tag.jj-role-admin { color:#7c3aed; background:rgba(124,58,237,0.12); }
+    #${PANEL_ID} .jj-icon-btn {
+        width:26px; height:26px; background:transparent; border:none;
+        border-radius:8px; color:var(--text-muted); font-size:14px; cursor:pointer;
+        display:flex; align-items:center; justify-content:center;
+        transition:background 0.15s, color 0.15s; flex-shrink:0;
+    }
+    #${PANEL_ID} .jj-icon-btn:hover       { background:rgba(148,163,184,0.14); color:var(--text); }
+    #${PANEL_ID} .jj-icon-btn.active      { background:rgba(148,163,184,0.2);  color:var(--text); }
+
+    #${PANEL_ID} .jj-body { padding:12px; display:flex; flex-direction:column; gap:9px; }
+    #${PANEL_ID} .jj-section-label {
+        font-size:10px; font-weight:700; letter-spacing:0.08em;
+        text-transform:uppercase; color:var(--text-label); padding:0 2px;
+    }
     #${PANEL_ID} .jj-btn {
-        width: 100%; padding: 10px 12px; background: rgba(255,255,255,0.92); color: #0f172a;
-        font-size: 13px; font-weight: 600; border: 1px solid rgba(203,213,225,0.9);
-        border-radius: 12px; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 10px;
-        transition: background 0.15s, border-color 0.15s, transform 0.15s;
+        width:100%; padding:10px 12px; background:var(--bg-btn); color:var(--text);
+        font-size:13px; font-weight:600; border:1px solid var(--border-btn);
+        border-radius:12px; cursor:pointer; text-align:left;
+        display:flex; align-items:center; gap:10px;
+        transition:background 0.15s, border-color 0.15s, transform 0.15s;
     }
-    #${PANEL_ID} .jj-btn:hover:not(:disabled) { background: #fff; border-color: rgba(148,163,184,0.9); transform: translateY(-1px); }
-    #${PANEL_ID} .jj-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-    #${PANEL_ID} .jj-btn.jj-wip { opacity: 0.4; cursor: not-allowed; }
+    #${PANEL_ID} .jj-btn:hover:not(:disabled) { background:var(--bg-btn-hover); border-color:var(--border-btn-h); transform:translateY(-1px); }
+    #${PANEL_ID} .jj-btn:disabled  { opacity:0.4;  cursor:not-allowed; transform:none !important; }
+    #${PANEL_ID} .jj-btn.jj-wip   { opacity:0.35; cursor:not-allowed; }
     #${PANEL_ID} .jj-btn .jj-btn-icon {
-        width: 22px; height: 22px; background: linear-gradient(180deg, #e2e8f0, #cbd5e1);
-        color: #334155; border-radius: 7px; display: flex; align-items: center; justify-content: center;
-        font-size: 11px; font-weight: 700; flex-shrink: 0; border: 1px solid rgba(148,163,184,0.35);
+        width:22px; height:22px; background:var(--bg-icon); color:var(--text-icon);
+        border-radius:7px; display:flex; align-items:center; justify-content:center;
+        font-size:11px; font-weight:700; flex-shrink:0;
+        border:1px solid rgba(148,163,184,0.25);
     }
     #${PANEL_ID} .jj-wip-badge {
-        margin-left: auto; font-size: 10px; font-weight: 600; color: #94a3b8;
-        background: rgba(148,163,184,0.12); border-radius: 6px; padding: 2px 6px;
+        margin-left:auto; font-size:10px; font-weight:600; color:var(--text-muted);
+        background:rgba(148,163,184,0.10); border-radius:6px; padding:2px 6px;
     }
-    #${PANEL_ID} .jj-toast { height: 3px; width: 100%; background: transparent; transition: background 0.25s; }
-    #${PANEL_ID} .jj-toast--running { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
-    #${PANEL_ID} .jj-toast--done    { background: linear-gradient(90deg, #34d399, #10b981); }
-    #${PANEL_ID} .jj-toast--error   { background: linear-gradient(90deg, #fb7185, #ef4444); }
-    #${PANEL_ID} .jj-status-text { font-size: 11px; color: #94a3b8; padding: 2px 2px 4px; min-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    #${PANEL_ID} .jj-status-text--running { color: #d97706; }
-    #${PANEL_ID} .jj-status-text--done    { color: #059669; }
-    #${PANEL_ID} .jj-status-text--error   { color: #dc2626; }
-    #${PANEL_ID} .jj-logout-btn {
-        width: 100%; padding: 7px 12px; background: transparent; color: #94a3b8;
-        font-size: 11px; font-weight: 500; border: 1px solid rgba(203,213,225,0.6);
-        border-radius: 10px; cursor: pointer; text-align: center;
+
+    #${PANEL_ID} .jj-toast { height:3px; width:100%; background:transparent; transition:background 0.25s; }
+    #${PANEL_ID} .jj-toast--running { background:linear-gradient(90deg,#fbbf24,#f59e0b); }
+    #${PANEL_ID} .jj-toast--done    { background:linear-gradient(90deg,#34d399,#10b981); }
+    #${PANEL_ID} .jj-toast--error   { background:linear-gradient(90deg,#fb7185,#ef4444); }
+    #${PANEL_ID} .jj-status-text {
+        font-size:11px; color:var(--text-muted); padding:2px 2px 0;
+        min-height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
     }
-    #${PANEL_ID} .jj-logout-btn:hover { color: #ef4444; border-color: rgba(239,68,68,0.4); }
+    #${PANEL_ID} .jj-status-text--running { color:#d97706; }
+    #${PANEL_ID} .jj-status-text--done    { color:#059669; }
+    #${PANEL_ID} .jj-status-text--error   { color:#dc2626; }
+
+    /* ── Cajón de ajustes ── */
+    #${PANEL_ID} .jj-settings {
+        overflow:hidden; max-height:0;
+        transition:max-height 0.28s cubic-bezier(0.4,0,0.2,1);
+    }
+    #${PANEL_ID} .jj-settings.open { max-height:220px; }
+    #${PANEL_ID} .jj-settings-inner {
+        padding:10px 12px 14px;
+        border-top:1px solid var(--border-sep);
+        background:var(--bg-settings);
+        display:flex; flex-direction:column; gap:12px;
+    }
+    #${PANEL_ID} .jj-setting-row {
+        display:flex; align-items:center; justify-content:space-between;
+    }
+    #${PANEL_ID} .jj-setting-label { font-size:12px; font-weight:600; color:var(--text); }
+    #${PANEL_ID} .jj-setting-sub   { font-size:10px; color:var(--text-muted); margin-top:2px; }
+
+    /* Toggle switch */
+    #${PANEL_ID} .jj-toggle {
+        width:40px; height:22px; background:var(--toggle-track);
+        border-radius:11px; position:relative; cursor:pointer;
+        border:none; padding:0; flex-shrink:0; transition:background 0.2s;
+    }
+    #${PANEL_ID} .jj-toggle[data-checked="true"] { background:var(--toggle-on); }
+    #${PANEL_ID} .jj-toggle .jj-toggle-knob {
+        position:absolute; top:3px; left:3px;
+        width:16px; height:16px; background:#fff;
+        border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.2);
+        transition:transform 0.2s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    /* Botón rojo ajustes */
+    #${PANEL_ID} .jj-danger-btn {
+        width:100%; padding:8px 12px;
+        background:transparent; color:#ef4444;
+        font-size:12px; font-weight:600;
+        border:1px solid rgba(239,68,68,0.25); border-radius:10px;
+        cursor:pointer; text-align:center;
+        transition:background 0.15s, border-color 0.15s;
+    }
+    #${PANEL_ID} .jj-danger-btn:hover { background:rgba(239,68,68,0.07); border-color:rgba(239,68,68,0.5); }
+
+    /* ── Mini burbuja ── */
     #${MINI_ID} {
-        position: fixed; right: 20px; bottom: 20px; z-index: 2147483647;
-        width: 46px; height: 46px; background: rgba(255,255,255,0.92); color: #334155;
-        border-radius: 50%; box-shadow: 0 8px 24px rgba(15,23,42,0.18);
-        border: 1px solid rgba(148,163,184,0.2); cursor: pointer;
-        display: none; align-items: center; justify-content: center;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        font-size: 10px; font-weight: 700; letter-spacing: 0.05em; user-select: none;
-        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        position:fixed; right:20px; bottom:20px; z-index:2147483647;
+        width:46px; height:46px; background:rgba(255,255,255,0.92); color:#334155;
+        border-radius:50%; box-shadow:0 8px 24px rgba(15,23,42,0.18);
+        border:1px solid rgba(148,163,184,0.2); cursor:pointer;
+        display:none; align-items:center; justify-content:center;
+        font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+        font-size:10px; font-weight:700; letter-spacing:0.05em; user-select:none;
+        backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+        transition:background 0.25s, color 0.25s, border-color 0.25s;
     }
         `;
         document.head.appendChild(style);
@@ -428,10 +531,18 @@
         panel.id = PANEL_ID;
         panel.innerHTML = `
             <div class="jj-header">
-                <span class="jj-title">Cezanne Exporter</span>
-                <button class="jj-collapse-btn" id="jj-collapse-btn" title="Minimizar">−</button>
+                <div class="jj-header-left">
+                    <span class="jj-title">Cezanne Exporter</span>
+                    <span class="jj-role-tag" id="jj-role-tag"></span>
+                </div>
+                <div class="jj-header-right">
+                    <button class="jj-icon-btn" id="jj-settings-btn" title="Ajustes">⚙</button>
+                    <button class="jj-icon-btn" id="jj-collapse-btn" title="Minimizar">−</button>
+                </div>
             </div>
+
             <div id="jj-toast" class="jj-toast"></div>
+
             <div class="jj-body">
                 <div class="jj-section-label">Plantillas</div>
 
@@ -440,20 +551,40 @@
                     <span>Maestro de empleados</span>
                 </button>
 
-                <button class="jj-btn jj-wip" disabled title="Próximamente">
+                <button class="jj-btn jj-wip" id="jj-btn-activos" disabled title="Próximamente">
                     <span class="jj-btn-icon">↓</span>
                     <span>Empleados Activos</span>
                     <span class="jj-wip-badge">En desarrollo</span>
                 </button>
 
-                <button class="jj-btn jj-wip" disabled title="Próximamente">
+                <button class="jj-btn jj-wip" id="jj-btn-revision" disabled title="Próximamente">
                     <span class="jj-btn-icon">↓</span>
                     <span>Revisión Médica 2025</span>
                     <span class="jj-wip-badge">En desarrollo</span>
                 </button>
 
                 <div id="jj-status-text" class="jj-status-text">Listo</div>
-                <button class="jj-logout-btn" id="jj-logout-btn">Cerrar sesión</button>
+            </div>
+
+            <!-- Cajón de ajustes -->
+            <div class="jj-settings" id="jj-settings-panel">
+                <div class="jj-settings-inner">
+                    <div class="jj-section-label">Ajustes</div>
+
+                    <div class="jj-setting-row">
+                        <div>
+                            <div class="jj-setting-label">Tema oscuro</div>
+                            <div class="jj-setting-sub">Cambia entre claro y oscuro</div>
+                        </div>
+                        <button class="jj-toggle" id="jj-theme-toggle" data-checked="false">
+                            <span class="jj-toggle-knob"></span>
+                        </button>
+                    </div>
+
+                    <button class="jj-danger-btn" id="jj-logout-btn">
+                       Cambiar contraseña
+                    </button>
+                </div>
             </div>`;
 
         const mini = document.createElement('div');
@@ -463,9 +594,14 @@
         document.body.appendChild(panel);
         document.body.appendChild(mini);
 
+        // Aplicar tema y rol guardados al cargar
+        applyTheme(getTheme());
+        if (getStoredToken()) applyRole(getRole());
+
+        // Posición guardada
         const pos = getPos();
         if (pos) {
-            const { x, y } = clampPos(pos.x, pos.y, 268, 200);
+            const { x, y } = clampPos(pos.x, pos.y, 268, 220);
             [panel, mini].forEach(el => {
                 el.style.left = x + 'px'; el.style.top = y + 'px';
                 el.style.right = 'auto'; el.style.bottom = 'auto';
@@ -498,13 +634,53 @@
             expandPanel();
         });
 
-        panel.querySelector('#jj-logout-btn').addEventListener('click', () => {
-            clearToken(); authVerified = false; setStatus('', 'Listo');
+        // Botón ⚙ → abrir / cerrar cajón
+        const settingsBtn   = panel.querySelector('#jj-settings-btn');
+        const settingsPanel = panel.querySelector('#jj-settings-panel');
+        settingsBtn.addEventListener('click', () => {
+            const isOpen = settingsPanel.classList.toggle('open');
+            settingsBtn.classList.toggle('active', isOpen);
         });
 
+        // Toggle tema
+        const themeToggle = panel.querySelector('#jj-theme-toggle');
+        themeToggle.addEventListener('click', () => {
+            const next = getTheme() === 'dark' ? 'light' : 'dark';
+            saveTheme(next);
+            applyTheme(next);
+        });
+
+        // Cambiar contraseña → borrar sesión local y pedir de nuevo la próxima vez
+        panel.querySelector('#jj-logout-btn').addEventListener('click', () => {
+            clearToken(); clearRole(); authVerified = false;
+            setStatus('', 'Listo');
+            applyRole('basic');
+            const roleTag = panel.querySelector('#jj-role-tag');
+            if (roleTag) roleTag.textContent = '';
+            settingsPanel.classList.remove('open');
+            settingsBtn.classList.remove('active');
+        });
+
+        // Botones de plantillas
         panel.querySelector('#jj-btn-maestro').addEventListener('click', () => {
             if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
-            ensureAuth(() => runExportFlow());
+            ensureAuth((role) => { applyRole(role); runExportFlow(); });
+        });
+        panel.querySelector('#jj-btn-activos').addEventListener('click', () => {
+            if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
+            ensureAuth((role) => {
+                applyRole(role);
+                // TODO: implementar runExportFlowActivos()
+                setStatus('error', '⚙️ Flujo pendiente de implementar');
+            });
+        });
+        panel.querySelector('#jj-btn-revision').addEventListener('click', () => {
+            if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
+            ensureAuth((role) => {
+                applyRole(role);
+                // TODO: implementar runExportFlowRevision()
+                setStatus('error', '⚙️ Flujo pendiente de implementar');
+            });
         });
 
         makeDraggable(panel, panel.querySelector('.jj-header'));
