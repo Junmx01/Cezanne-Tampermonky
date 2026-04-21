@@ -4,6 +4,7 @@
 // @version      1.0.1
 // @description  Exportador con autorización por código
 // @match        *://*/CezanneHR/*
+// @match        https://w3.cezanneondemand.com/*
 // @grant        GM_addStyle
 // @connect      crimson-breeze-86fb.jy734933371.workers.dev
 // @updateURL    https://raw.githubusercontent.com/Junmx01/Cezanne-Tampermonky/main/cezanne-export.user.js
