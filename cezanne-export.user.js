@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Cezanne - Exportar Maestro de empleados
 // @namespace    http://tampermonkey.net/
-// @version      4.0
-// @description  Exportador con perfiles por usuario, botón de cancelar y ajustes de UI
+// @version      4.2
+// @description  Exportador con perfiles por usuario, botón de cancelar y ajustes de UI (v4.2: nuevo flujo lista de plantillas + "Abrir al Informe")
 // @match        *://*/CezanneHR/*
 // @match        https://w3.cezanneondemand.com/*
 // @grant        GM_addStyle
@@ -11,8 +11,40 @@
 // @downloadURL  https://raw.githubusercontent.com/Junmx01/Cezanne-Tampermonky/main/cezanne-export.user.js
 // ==/UserScript==
 
+/*
+  CAMBIOS v4.2 (2026-09-17) — nueva interfaz de Informes
+  ------------------------------------------------------
+  Flujo NUEVO (confirmado con Recorder + capturas de pantalla):
+    1. Informes y Analíticas > Informe Resumen de Personas
+    2. Lista de plantillas guardadas -> pulsar la fila "Maestro de empleados"
+       (div[role=listitem].cz-master-detail-row-wrapper, botón interno
+        button.cz-master-detail-disclosure-icon-2025)
+    3. Se abre el panel de detalle. Se comprueba que "Nombre de Plantilla"
+       contiene el nombre correcto y que la casilla "Automatización para
+       datos de entrada y salida" está marcada.
+    4. Pulsar "Abrir al Informe" -> genera y descarga el informe.
+
+  Ya NO existen: "Utilizar Plantilla Existente", el desplegable mat-select,
+  los dos "Próximo" y "Guardar y Exportar". El script ya no pulsa ningún
+  botón de Guardar/Insertar.
+
+  · La fila se localiza por texto EXACTO -> nunca pulsará "Maestro Emilio".
+  · Antes de pulsar "Abrir al Informe" se revalida que el detalle abierto es
+    el de la plantilla correcta; si no, aborta.
+  · Versión visible: cabecera del panel, texto de estado y consola.
+  · El CSS "* { box-sizing }" se limita al panel (antes afectaba a Cezanne).
+
+  PENDIENTE DE VERIFICAR
+  ----------------------
+  · Qué ocurre exactamente tras "Abrir al Informe" (descarga directa, pestaña
+    nueva, diálogo...). El script lo pulsa y termina ahí.
+  · No se modifica "Fecha de referencia" (por defecto = hoy) ni "Idioma".
+*/
+
 (function () {
     'use strict';
+
+    const VERSION = '4.2';
 
     // ════════════════════════════════════════════════════════════════
     //  CONFIGURACIÓN DE PERFILES
@@ -29,8 +61,6 @@
         'junjie': { label: 'Admin',  color: 'admin', buttons: ['maestro', 'activos', 'revision'] },
 
         // ── Usuarios ───────────────────────────────────────────
-        // Cambia buttons[] para cada persona según lo que necesite
-        // IDs disponibles: 'maestro' | 'activos' | 'revision'
         'emilio': { label: 'Emilio', color: 'user',  buttons: ['maestro'] },
         'merce':  { label: 'Mercè',  color: 'user',  buttons: ['maestro'] },
         'luisa':  { label: 'Luisa',  color: 'user',  buttons: ['maestro'] },
@@ -50,7 +80,27 @@
     const STORAGE_PROFILE   = 'jj_auth_profile';
     const STORAGE_THEME     = 'jj_theme';
     const INFORME_HREF      = '/CezanneHR/-/IQS/node/cf2ce6e3-6382-444c-800d-ea1502e71db5';
-    const TARGET_TEMPLATE   = 'Maestro de empleados (People & Organization)';
+    const TARGET_TEMPLATE   = 'Maestro de empleados';
+    const TEXTO_LISTO       = `Listo · v${VERSION}`;
+
+    // ════════════════════════════════════════════════════════════════
+    //  SELECTORES Y TEXTOS DE CEZANNE
+    //  Si Cezanne cambia la interfaz, en principio solo hay que tocar aquí.
+    // ════════════════════════════════════════════════════════════════
+    const SEL = {
+        menuInformes:   '#navLink-9be6b119-d395-4322-8a0b-9dc8ba2f84f4, a[title="Informes y Anal\u00edticas"], [aria-label="Informes y Anal\u00edticas"]',
+        linkInforme:    `a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`,
+        // Lista de plantillas guardadas (UI 2025/2026).
+        // Se usa *= para tolerar cambios de sufijo de a\u00f1o en las clases.
+        filaLista:      '[role="listitem"][class*="cz-master-detail-row-wrapper"]',
+        textoFila:      '[class*="cz-master-detail-list-item"]',
+        botonFila:      'button[class*="cz-master-detail-disclosure"]',
+        checkboxAria:   'input[type="checkbox"][aria-label="Automatizaci\u00f3n para datos de entrada y salida"]',
+    };
+    const TXT = {
+        abrirInforme:   'Abrir al Informe',
+        automatizacion: 'Automatizaci\u00f3n para datos de entrada y salida',
+    };
 
     // ── Auth / Perfil ──
     function getStoredToken()   { return localStorage.getItem(STORAGE_TOKEN)   || ''; }
@@ -124,7 +174,7 @@
         overlay.id = 'jj-auth-overlay';
         overlay.innerHTML = `
             <div id="jj-auth-box">
-                <h2>🔐 Cezanne Exporter</h2>
+                <h2>🔐 Cezanne Exporter v${VERSION}</h2>
                 <p>Introduce el código de autorización proporcionado por el administrador.</p>
                 <input id="jj-auth-input" type="text" placeholder="Código de autorización" autocomplete="off" spellcheck="false" />
                 <div id="jj-auth-err">Código no válido. Contacta con el administrador.</div>
@@ -180,9 +230,18 @@
         return Array.from(document.querySelectorAll('button'))
             .find(b => norm(b) === text && isVisible(b) && !b.disabled);
     }
+    // (sin uso desde v4.2; se conserva por si vuelve algún botón clásico)
     async function clickButton(text, timeout = 25000) {
         const btn = await waitFor(() => findButton(text), timeout, 400, `No se encontró el botón: "${text}"`);
         btn.click();
+    }
+    // Busca cualquier elemento visible por texto exacto (no solo <button>).
+    // Devuelve el más interno para no pulsar un contenedor grande.
+    // Nunca devuelve elementos del propio panel del exportador.
+    function findClickableByText(text) {
+        return Array.from(document.querySelectorAll('button, a, [role="button"], div, span'))
+            .filter(el => !el.closest(`#${PANEL_ID}`) && norm(el) === text && isVisible(el))
+            .find(el => !Array.from(el.children).some(c => norm(c) === text));
     }
 
     // ── Cancelación ──
@@ -191,89 +250,91 @@
     }
 
     // ── Pasos del flujo ──
+    const TOTAL_PASOS = 4;
+
+    /** Fila de la lista cuyo texto es EXACTAMENTE el nombre (evita "Maestro Emilio"). */
+    function filaPlantilla(nombre) {
+        return Array.from(document.querySelectorAll(SEL.filaLista)).find(fila => {
+            const t = fila.querySelector(SEL.textoFila);
+            return t && norm(t) === nombre && isVisible(fila);
+        });
+    }
+
+    /** ¿Está abierto el detalle de ESA plantilla? Devuelve el elemento "Abrir al Informe". */
+    function detalleAbierto(nombre) {
+        const nombreOk = Array.from(document.querySelectorAll('input'))
+            .some(inp => isVisible(inp) && (inp.value || '').trim() === nombre);
+        return nombreOk ? findClickableByText(TXT.abrirInforme) : null;
+    }
+
+    /** Casilla "Automatización…": por aria-label, o subiendo desde su etiqueta. */
+    function buscarCheckboxAutomatizacion() {
+        const porAria = document.querySelector(SEL.checkboxAria);
+        if (porAria && isVisible(porAria)) return porAria;
+        const etiqueta = Array.from(document.querySelectorAll('label, div, span'))
+            .filter(el => !el.closest(`#${PANEL_ID}`) && norm(el) === TXT.automatizacion && isVisible(el))
+            .find(el => !Array.from(el.children).some(c => norm(c) === TXT.automatizacion));
+        let nodo = etiqueta;
+        for (let n = 0; nodo && n < 5; n++, nodo = nodo.parentElement) {
+            const cb = nodo.querySelector('input[type="checkbox"]');
+            if (cb) return cb;
+        }
+        return null;
+    }
+
     async function paso1_navegar() {
-        setStatus('running', 'Paso 1/6: Navegando al informe…');
-        if (findButton('Utilizar Plantilla Existente')) return;
-        let link = document.querySelector(
-            `a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`
-        );
+        setStatus('running', `Paso 1/${TOTAL_PASOS}: Navegando al informe…`);
+        if (filaPlantilla(TARGET_TEMPLATE) || detalleAbierto(TARGET_TEMPLATE)) return;
+
+        let link = document.querySelector(SEL.linkInforme);
         if (!link) {
-            const menuIcon = document.querySelector(
-                'a[title="Informes y Analíticas"], a[id="navLink-9be6b119-d395-4322-8a0b-9dc8ba2f84f4"], #ea96f17f-06cc-4493-a0d8-f527aaf01d9c'
-            );
+            const menuIcon = document.querySelector(SEL.menuInformes);
             if (!menuIcon) throw new Error('No se encontró el menú lateral "Informes y Analíticas"');
             menuIcon.click(); await sleep(1500); checkAbort();
             link = await waitFor(
-                () => document.querySelector(`a[href="${INFORME_HREF}"], a[id="navLink-cf2ce6e3-6382-444c-800d-ea1502e71db5"]`),
+                () => document.querySelector(SEL.linkInforme),
                 10000, 300, 'No se encontró "Informe Resumen de Personas" en el menú'
             );
         }
         link.click();
-        await waitFor(() => findButton('Utilizar Plantilla Existente'), 25000, 400, 'La página del informe tardó demasiado en cargar');
+        await waitFor(
+            () => filaPlantilla(TARGET_TEMPLATE) || detalleAbierto(TARGET_TEMPLATE),
+            25000, 400, `No apareció la plantilla "${TARGET_TEMPLATE}" en la lista`
+        );
         await sleep(400); checkAbort();
     }
-    async function paso2_usarPlantilla() {
-        setStatus('running', 'Paso 2/6: Abriendo plantillas…');
-        await clickButton('Utilizar Plantilla Existente');
+
+    async function paso2_abrirPlantilla() {
+        setStatus('running', `Paso 2/${TOTAL_PASOS}: Abriendo plantilla…`);
+        if (detalleAbierto(TARGET_TEMPLATE)) return;
+        const fila = filaPlantilla(TARGET_TEMPLATE);
+        if (!fila) throw new Error(`No se encontró la fila "${TARGET_TEMPLATE}"`);
+        (fila.querySelector(SEL.botonFila) || fila).click();
         await waitFor(
-            () => document.querySelector('mat-select, [role="combobox"]') &&
-                  isVisible(document.querySelector('mat-select, [role="combobox"]')),
-            15000, 300, 'No apareció el desplegable de plantillas'
+            () => detalleAbierto(TARGET_TEMPLATE),
+            20000, 400, `No se abrió el detalle de "${TARGET_TEMPLATE}"`
         );
         await sleep(600); checkAbort();
     }
-    async function paso3_seleccionarPlantilla() {
-        setStatus('running', 'Paso 3/6: Seleccionando plantilla…');
-        const matSelect = await waitFor(
-            () => Array.from(document.querySelectorAll('mat-select')).find(el => isVisible(el)),
-            15000, 300, 'No se encontró el desplegable mat-select'
+
+    async function paso3_verificarOpciones() {
+        setStatus('running', `Paso 3/${TOTAL_PASOS}: Verificando opciones…`);
+        const checkbox = await waitFor(
+            buscarCheckboxAutomatizacion,
+            10000, 400, `No se encontró la casilla "${TXT.automatizacion}"`
         );
-        const trigger = matSelect.querySelector('.mat-mdc-select-trigger') || matSelect;
-        matSelect.focus(); await sleep(200); checkAbort(); trigger.click(); await sleep(800); checkAbort();
-        const panelOpen = () => !!document.querySelector('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-mdc-option');
-        if (!panelOpen()) {
-            ['keydown','keyup'].forEach(type =>
-                matSelect.dispatchEvent(new KeyboardEvent(type, { key:' ', code:'Space', keyCode:32, bubbles:true, cancelable:true }))
-            );
-            await sleep(600); checkAbort();
-        }
-        if (!panelOpen()) {
-            for (const type of ['pointerdown','mousedown','pointerup','mouseup','click'])
-                trigger.dispatchEvent(new MouseEvent(type, { bubbles:true, cancelable:true, composed:true, view:window }));
-            await waitFor(panelOpen, 8000, 300, 'No se pudo abrir el desplegable de plantillas');
-        }
-        const option = await waitFor(
-            () => Array.from(document.querySelectorAll('.cdk-overlay-pane mat-option, .cdk-overlay-pane .mat-mdc-option'))
-                       .find(el => norm(el) === TARGET_TEMPLATE && isVisible(el)),
-            10000, 300, `No se encontró la opción "${TARGET_TEMPLATE}"`
-        );
-        option.click(); await sleep(800); checkAbort();
+        if (!checkbox.checked) { checkbox.click(); await sleep(500); checkAbort(); }
+        if (!checkbox.checked) throw new Error(`No se pudo marcar "${TXT.automatizacion}"`);
     }
-    async function paso4_proximoUno() {
-        setStatus('running', 'Paso 4/6: Avanzando (1/2)…');
-        await clickButton('Próximo'); await sleep(1500); checkAbort();
-    }
-    async function paso5_checkboxYproximo() {
-        setStatus('running', 'Paso 5/6: Verificando opciones…');
-        const checkbox = await waitFor(() => {
-            const byLabel = document.querySelector('input[type="checkbox"][aria-label="Automatización para datos de entrada y salida"]');
-            if (byLabel && isVisible(byLabel)) return byLabel;
-            return Array.from(document.querySelectorAll('input[type="checkbox"][kendocheckbox], input.k-checkbox'))
-                .find(el => isVisible(el));
-        }, 20000, 400, 'No apareció el checkbox de opciones');
-        if (!checkbox.checked) { checkbox.click(); await sleep(400); checkAbort(); }
-        await clickButton('Próximo');
-        await waitFor(
-            () => document.querySelector('#criteria-builder-operator-all') || findButton('Guardar y Exportar'),
-            30000, 500, 'La página de criterios tardó demasiado en cargar'
-        );
-        await sleep(600); checkAbort();
-    }
-    async function paso6_guardar() {
-        setStatus('running', 'Paso 6/6: Exportando…');
-        await clickButton('Guardar y Exportar');
-        await sleep(1000);
-        setStatus('done', '✅ Exportación completada');
+
+    async function paso4_abrirInforme() {
+        setStatus('running', `Paso 4/${TOTAL_PASOS}: Abriendo informe…`);
+        // Revalidación final: no pulsar nada si el detalle ya no es el correcto.
+        const el = detalleAbierto(TARGET_TEMPLATE);
+        if (!el) throw new Error(`El detalle abierto no es "${TARGET_TEMPLATE}". Abortado.`);
+        (el.closest('button') || el).click();
+        await sleep(1500);
+        setStatus('done', `✅ Informe lanzado · v${VERSION}`);
     }
 
     async function runExportFlow() {
@@ -281,13 +342,15 @@
         window.__jj_export_running = true;
         setRunningUI(true);
         try {
-            await paso1_navegar(); await paso2_usarPlantilla(); await paso3_seleccionarPlantilla();
-            await paso4_proximoUno(); await paso5_checkboxYproximo(); await paso6_guardar();
+            await paso1_navegar();
+            await paso2_abrirPlantilla();
+            await paso3_verificarOpciones();
+            await paso4_abrirInforme();
         } catch (err) {
             if (err.message === 'Cancelado por el usuario') {
                 setStatus('', 'Cancelado');
             } else {
-                console.error('[Cezanne Exporter]', err);
+                console.error(`[Cezanne Exporter v${VERSION}]`, err);
                 setStatus('error', `❌ ${err.message}`);
             }
         } finally {
@@ -314,14 +377,12 @@
         const profile = PROFILES[profileKey];
         if (!profile) return;
 
-        // Actualizar etiqueta de nombre
         const roleTag = panel.querySelector('#jj-role-tag');
         if (roleTag) {
             roleTag.textContent = profile.label;
             roleTag.className = 'jj-role-tag' + (profile.color === 'admin' ? ' jj-role-admin' : '');
         }
 
-        // Mostrar/ocultar botones según el perfil
         const allBtns = {
             maestro:  panel.querySelector('#jj-btn-maestro'),
             activos:  panel.querySelector('#jj-btn-activos'),
@@ -330,12 +391,12 @@
         Object.entries(allBtns).forEach(([id, btn]) => {
             if (!btn) return;
             if (profile.buttons.includes(id)) {
-                btn.style.display = '';    // visible
+                btn.style.display = '';
                 btn.disabled = false;
                 btn.classList.remove('jj-wip');
                 btn.querySelector('.jj-wip-badge')?.remove();
             } else {
-                btn.style.display = 'none'; // oculto
+                btn.style.display = 'none';
             }
         });
     }
@@ -358,7 +419,7 @@
         const toast = document.querySelector('#jj-toast');
         const text  = document.querySelector('#jj-status-text');
         if (toast) toast.className = 'jj-toast' + (type ? ' jj-toast--' + type : '');
-        if (text)  { text.className = 'jj-status-text' + (type ? ' jj-status-text--' + type : ''); text.textContent = msg; }
+        if (text)  { text.className = 'jj-status-text' + (type ? ' jj-status-text--' + type : ''); text.textContent = msg; text.title = msg; }
     }
 
     // ── Tema ──
@@ -465,7 +526,7 @@
         color:#e2e8f0 !important;
         border-color:rgba(255,255,255,0.1) !important;
     }
-    * { box-sizing:border-box; }
+    #${PANEL_ID}, #${PANEL_ID} *, #${MINI_ID} { box-sizing:border-box; }
     #${PANEL_ID} {
         position:fixed; right:20px; bottom:20px; z-index:2147483647;
         width:268px; background:var(--bg); color:var(--text);
@@ -487,10 +548,14 @@
         font-size:12px; font-weight:700; letter-spacing:0.06em;
         text-transform:uppercase; color:var(--text-title); white-space:nowrap;
     }
+    #${PANEL_ID} .jj-version {
+        font-size:10px; font-weight:600; color:var(--text-muted); white-space:nowrap;
+    }
     #${PANEL_ID} .jj-role-tag {
         font-size:10px; font-weight:600; color:var(--text-muted);
         background:rgba(148,163,184,0.12); border-radius:6px; padding:2px 7px; white-space:nowrap;
     }
+    #${PANEL_ID} .jj-role-tag:empty { display:none; }
     #${PANEL_ID} .jj-role-tag.jj-role-admin { color:#7c3aed; background:rgba(124,58,237,0.12); }
     #${PANEL_ID} .jj-icon-btn {
         width:26px; height:26px; background:transparent; border:none;
@@ -520,18 +585,6 @@
         font-size:11px; font-weight:700; flex-shrink:0; border:1px solid rgba(148,163,184,0.25);
     }
 
-    /* Botón cancelar */
-    #${PANEL_ID} #jj-cancel-btn {
-        display:none;
-        width:100%; padding:9px 12px;
-        background:rgba(239,68,68,0.08); color:#ef4444;
-        font-size:12px; font-weight:600;
-        border:1px solid rgba(239,68,68,0.25); border-radius:10px;
-        cursor:pointer; text-align:center;
-        transition:background 0.15s, border-color 0.15s;
-    }
-    #${PANEL_ID} #jj-cancel-btn:hover { background:rgba(239,68,68,0.14); border-color:rgba(239,68,68,0.5); }
-
     #${PANEL_ID} .jj-toast { height:3px; width:100%; background:transparent; transition:background 0.25s; }
     #${PANEL_ID} .jj-toast--running { background:linear-gradient(90deg,#fbbf24,#f59e0b); }
     #${PANEL_ID} .jj-toast--done    { background:linear-gradient(90deg,#34d399,#10b981); }
@@ -542,9 +595,8 @@
     }
     #${PANEL_ID} .jj-status-text--running { color:#d97706; }
     #${PANEL_ID} .jj-status-text--done    { color:#059669; }
-    #${PANEL_ID} .jj-status-text--error   { color:#dc2626; }
+    #${PANEL_ID} .jj-status-text--error   { color:#dc2626; white-space:normal; }
 
-    /* Cajón de ajustes */
     #${PANEL_ID} .jj-settings { overflow:hidden; max-height:0; transition:max-height 0.28s cubic-bezier(0.4,0,0.2,1); }
     #${PANEL_ID} .jj-settings.open { max-height:220px; }
     #${PANEL_ID} .jj-settings-inner {
@@ -591,7 +643,6 @@
         backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
         transition:background 0.25s, color 0.25s, border-color 0.25s;
     }
-
         `;
         document.head.appendChild(style);
 
@@ -601,6 +652,7 @@
             <div class="jj-header">
                 <div class="jj-header-left">
                     <span class="jj-title">Cezanne Exporter</span>
+                    <span class="jj-version">v${VERSION}</span>
                     <span class="jj-role-tag" id="jj-role-tag"></span>
                 </div>
                 <div class="jj-header-right">
@@ -629,7 +681,7 @@
                     <span>Revisión Médica 2025</span>
                 </button>
 
-                <div id="jj-status-text" class="jj-status-text">Listo</div>
+                <div id="jj-status-text" class="jj-status-text">${TEXTO_LISTO}</div>
 
                 <button class="jj-logout-visible-btn" id="jj-cancel-visible-btn">Cancelar</button>
             </div>
@@ -653,11 +705,11 @@
         const mini = document.createElement('div');
         mini.id = MINI_ID;
         mini.innerHTML = 'EX';
+        mini.title = `Cezanne Exporter v${VERSION}`;
 
         document.body.appendChild(panel);
         document.body.appendChild(mini);
 
-        // Aplicar tema y perfil guardados al cargar
         applyTheme(getTheme());
         const savedProfile = getStoredProfile();
         if (getStoredToken() && savedProfile && PROFILES[savedProfile]) {
@@ -666,7 +718,6 @@
 
         const PANEL_W = 268, MINI_W = 46, SNAP_THRESHOLD = 80;
 
-        // Posición guardada
         const pos = getPos();
         if (pos) {
             const { x, y } = clampPos(pos.x, pos.y, PANEL_W, 220);
@@ -678,7 +729,6 @@
 
         let collapsed = getCollapsed();
 
-        // collapsePanel: mini aparece en la esquina donde estaba el botón "−"
         function collapsePanel() {
             const r = panel.getBoundingClientRect();
             mini.style.left = (r.right - MINI_W) + 'px';
@@ -687,7 +737,6 @@
             panel.style.display = 'none'; mini.style.display = 'flex';
             collapsed = true; setCollapsed(true);
         }
-        // expandPanel: panel se abre con la esquina superior derecha alineada con el mini
         function expandPanel() {
             const r = mini.getBoundingClientRect();
             panel.style.left = Math.max(0, r.right - PANEL_W) + 'px';
@@ -706,7 +755,6 @@
             expandPanel();
         });
 
-        // Ajustes
         const settingsBtn   = panel.querySelector('#jj-settings-btn');
         const settingsPanel = panel.querySelector('#jj-settings-panel');
         settingsBtn.addEventListener('click', () => {
@@ -714,19 +762,16 @@
             settingsBtn.classList.toggle('active', isOpen);
         });
 
-        // Toggle tema
         panel.querySelector('#jj-theme-toggle').addEventListener('click', () => {
             const next = getTheme() === 'dark' ? 'light' : 'dark';
             saveTheme(next); applyTheme(next);
         });
 
-        // Cerrar sesión (ajustes)
         panel.querySelector('#jj-logout-btn').addEventListener('click', doLogout);
 
         function doLogout() {
             clearToken(); clearProfile(); authVerified = false;
-            setStatus('', 'Listo');
-            // Ocultar todos los botones hasta que se vuelva a autenticar
+            setStatus('', TEXTO_LISTO);
             ['#jj-btn-maestro','#jj-btn-activos','#jj-btn-revision'].forEach(sel => {
                 const b = panel.querySelector(sel);
                 if (b) { b.style.display = 'none'; }
@@ -737,14 +782,12 @@
             settingsBtn.classList.remove('active');
         }
 
-        // Cancelar tarea (botón siempre visible)
         panel.querySelector('#jj-cancel-visible-btn').addEventListener('click', () => {
             if (!window.__jj_export_running) return;
             window.__jj_export_abort = true;
             setStatus('', 'Cancelando…');
         });
 
-        // Botones de plantillas
         function handleBtnClick(flowFn) {
             return () => {
                 if (window.__jj_export_running) { setStatus('running', 'Tarea en curso, espera…'); return; }
@@ -756,7 +799,6 @@
         panel.querySelector('#jj-btn-revision').addEventListener('click', handleBtnClick(() => setStatus('error', '⚙️ Flujo pendiente de implementar')));
 
         makeDraggable(panel, panel.querySelector('.jj-header'), (r) => {
-            // Si se suelta cerca del borde derecho → snap pegado al borde (totalmente visible)
             let x = r.left, y = r.top;
             if (window.innerWidth - r.right < SNAP_THRESHOLD) {
                 x = window.innerWidth - PANEL_W;
@@ -766,7 +808,6 @@
         });
         makeDraggable(mini, mini);
 
-        // Restaurar estado dock al cargar
         if (collapsed) collapsePanel();
     }
 
@@ -774,5 +815,6 @@
         if (!document.body) { setTimeout(initWhenReady, 500); return; }
         createUI();
     }
+    console.log(`[Cezanne Exporter] v${VERSION} activo`);
     initWhenReady();
 })();
